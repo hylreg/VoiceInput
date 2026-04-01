@@ -151,7 +151,7 @@ def main() -> int:
         from modelscope import snapshot_download
     except ImportError as exc:
         print(
-            "需要先安装 modelscope。可执行：uv pip install -r scripts/requirements-asr.txt",
+            "需要先安装 modelscope。可执行：uv pip install -r scripts/requirements-asr-base.txt",
             file=sys.stderr,
         )
         return 1

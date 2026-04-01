@@ -65,6 +65,108 @@ impl MacImeBridge for UnwiredMacImeBridge {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub struct ClipboardMacImeBridge;
+
+#[cfg(target_os = "macos")]
+impl Default for ClipboardMacImeBridge {
+    fn default() -> Self {
+        Self
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl MacImeBridge for ClipboardMacImeBridge {
+    fn start_composition(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_preedit(&self, _text: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn commit_text(&self, text: &str) -> Result<()> {
+        use cocoa::appkit::{NSPasteboard, NSPasteboardTypeString};
+        use cocoa::base::nil;
+        use cocoa::foundation::NSString;
+        use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+        unsafe {
+            let pasteboard = NSPasteboard::generalPasteboard(nil);
+            let _: i64 = pasteboard.clearContents();
+            let string = NSString::alloc(nil).init_str(text);
+            let _: bool = pasteboard.setString_forType(string, NSPasteboardTypeString);
+
+            let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+                .map_err(|_| VoiceInputError::Injection("创建键盘事件源失败".to_string()))?;
+
+            let key_down = CGEvent::new_keyboard_event(source.clone(), 0x09, true)
+                .map_err(|_| VoiceInputError::Injection("创建粘贴快捷键失败".to_string()))?;
+            key_down.set_flags(CGEventFlags::CGEventFlagCommand);
+            key_down.post(CGEventTapLocation::HID);
+
+            let key_up = CGEvent::new_keyboard_event(source, 0x09, false)
+                .map_err(|_| VoiceInputError::Injection("创建粘贴快捷键失败".to_string()))?;
+            key_up.set_flags(CGEventFlags::CGEventFlagCommand);
+            key_up.post(CGEventTapLocation::HID);
+        }
+
+        Ok(())
+    }
+
+    fn cancel_composition(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn end_composition(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub struct ClipboardMacImeBridge;
+
+#[cfg(not(target_os = "macos"))]
+impl Default for ClipboardMacImeBridge {
+    fn default() -> Self {
+        Self
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl MacImeBridge for ClipboardMacImeBridge {
+    fn start_composition(&self) -> Result<()> {
+        Err(VoiceInputError::Injection(
+            "clipboard 提交只支持 macOS".to_string(),
+        ))
+    }
+
+    fn update_preedit(&self, _text: &str) -> Result<()> {
+        Err(VoiceInputError::Injection(
+            "clipboard 提交只支持 macOS".to_string(),
+        ))
+    }
+
+    fn commit_text(&self, _text: &str) -> Result<()> {
+        Err(VoiceInputError::Injection(
+            "clipboard 提交只支持 macOS".to_string(),
+        ))
+    }
+
+    fn cancel_composition(&self) -> Result<()> {
+        Err(VoiceInputError::Injection(
+            "clipboard 提交只支持 macOS".to_string(),
+        ))
+    }
+
+    fn end_composition(&self) -> Result<()> {
+        Err(VoiceInputError::Injection(
+            "clipboard 提交只支持 macOS".to_string(),
+        ))
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct MockMacImeBridge {
     events: Arc<Mutex<Vec<MacImeEvent>>>,

@@ -27,10 +27,7 @@ impl AppController {
         }
     }
 
-    pub fn run_demo(&self) -> Result<String> {
-        self.hotkeys
-            .register_global_hotkey(&self.config.activation_hotkey)?;
-
+    pub fn process_once(&self) -> Result<String> {
         self.ime.start_composition()?;
         let outcome = (|| {
             let audio = self.recorder.record_once()?;
@@ -55,5 +52,12 @@ impl AppController {
                 Err(err)
             }
         }
+    }
+
+    pub fn run_demo(&self) -> Result<String> {
+        self.hotkeys
+            .register_global_hotkey(&self.config.activation_hotkey)?;
+
+        self.process_once()
     }
 }

@@ -110,7 +110,9 @@ impl IbusClientBridge {
                 }
                 ibus::AfterCallback::Keep
             })
-            .map_err(|e| VoiceInputError::Injection(format!("订阅 IBus 显示预编辑事件失败：{e}")))?;
+            .map_err(|e| {
+                VoiceInputError::Injection(format!("订阅 IBus 显示预编辑事件失败：{e}"))
+            })?;
 
         let events = Arc::clone(&self.events);
         let hide_token = context
@@ -120,18 +122,19 @@ impl IbusClientBridge {
                 }
                 ibus::AfterCallback::Keep
             })
-            .map_err(|e| VoiceInputError::Injection(format!("订阅 IBus 隐藏预编辑事件失败：{e}")))?;
+            .map_err(|e| {
+                VoiceInputError::Injection(format!("订阅 IBus 隐藏预编辑事件失败：{e}"))
+            })?;
 
-        self.tokens.borrow_mut().extend([update_token, commit_token, show_token, hide_token]);
+        self.tokens
+            .borrow_mut()
+            .extend([update_token, commit_token, show_token, hide_token]);
         *self.context.borrow_mut() = Some(context);
         Ok(())
     }
 
     pub fn recorded_events(&self) -> Vec<IbusEngineEvent> {
-        self.events
-            .lock()
-            .expect("IBus 桥接事件锁")
-            .clone()
+        self.events.lock().expect("IBus 桥接事件锁").clone()
     }
 }
 
@@ -139,11 +142,7 @@ impl IbusClientBridge {
 impl IbusEngineBridge for IbusClientBridge {
     fn start_composition(&self) -> Result<()> {
         self.ensure_context()?;
-        let context = self
-            .context
-            .borrow()
-            .as_ref()
-            .expect("IBus 上下文已初始化");
+        let context = self.context.borrow().as_ref().expect("IBus 上下文已初始化");
         context
             .focus_in()
             .map_err(|e| VoiceInputError::Injection(format!("IBus focus_in 失败：{e}")))?;
@@ -157,14 +156,12 @@ impl IbusEngineBridge for IbusClientBridge {
 
     fn update_preedit(&self, text: &str) -> Result<()> {
         self.ensure_context()?;
-        let context = self
-            .context
-            .borrow()
-            .as_ref()
-            .expect("IBus 上下文已初始化");
+        let context = self.context.borrow().as_ref().expect("IBus 上下文已初始化");
         context
             .set_surrounding_text(text.to_string(), text.len() as u32, text.len() as u32)
-            .map_err(|e| VoiceInputError::Injection(format!("IBus set_surrounding_text 失败：{e}")))?;
+            .map_err(|e| {
+                VoiceInputError::Injection(format!("IBus set_surrounding_text 失败：{e}"))
+            })?;
 
         if let Ok(mut lock) = self.events.lock() {
             lock.push(IbusEngineEvent::UpdatePreedit(text.to_string()));
@@ -179,11 +176,7 @@ impl IbusEngineBridge for IbusClientBridge {
             lock.push(IbusEngineEvent::CommitText(text.to_string()));
         }
 
-        let context = self
-            .context
-            .borrow()
-            .as_ref()
-            .expect("IBus 上下文已初始化");
+        let context = self.context.borrow().as_ref().expect("IBus 上下文已初始化");
         context
             .reset()
             .map_err(|e| VoiceInputError::Injection(format!("提交后 IBus reset 失败：{e}")))?;
@@ -196,11 +189,7 @@ impl IbusEngineBridge for IbusClientBridge {
         if let Ok(mut lock) = self.events.lock() {
             lock.push(IbusEngineEvent::CancelComposition);
         }
-        let context = self
-            .context
-            .borrow()
-            .as_ref()
-            .expect("IBus 上下文已初始化");
+        let context = self.context.borrow().as_ref().expect("IBus 上下文已初始化");
         context
             .reset()
             .map_err(|e| VoiceInputError::Injection(format!("取消后 IBus reset 失败：{e}")))?;
@@ -210,11 +199,7 @@ impl IbusEngineBridge for IbusClientBridge {
 
     fn end_composition(&self) -> Result<()> {
         self.ensure_context()?;
-        let context = self
-            .context
-            .borrow()
-            .as_ref()
-            .expect("IBus 上下文已初始化");
+        let context = self.context.borrow().as_ref().expect("IBus 上下文已初始化");
         context
             .focus_out()
             .map_err(|e| VoiceInputError::Injection(format!("IBus focus_out 失败：{e}")))?;
@@ -316,10 +301,7 @@ pub struct MockIbusBridge {
 
 impl MockIbusBridge {
     pub fn events(&self) -> Vec<IbusEngineEvent> {
-        self.events
-            .lock()
-            .expect("模拟 IBus 桥接锁")
-            .clone()
+        self.events.lock().expect("模拟 IBus 桥接锁").clone()
     }
 
     fn push(&self, event: IbusEngineEvent) -> Result<()> {

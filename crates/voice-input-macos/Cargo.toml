@@ -7,3 +7,11 @@ edition = "2021"
 voice-input-core = { path = "../voice-input-core" }
 voice-input-asr = { path = "../voice-input-asr" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.25"
+cocoa-foundation = "0.1"
+core-foundation = "0.9"
+core-graphics = "0.23"
+cpal = "0.16"
+hound = "3.5"
+objc = "0.2"

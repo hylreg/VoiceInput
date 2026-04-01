@@ -1,6 +1,6 @@
 use voice_input_core::{
     AppConfig, AppController, MockAudioRecorder, MockHotkeyManager, MockInputMethodHost,
-    MockTranscriber, Result, Transcript, Transcriber,
+    MockTranscriber, Result, Transcriber, Transcript,
 };
 
 #[test]
@@ -69,8 +69,5 @@ fn demo_pipeline_cancels_composition_on_failure() {
         err,
         voice_input_core::VoiceInputError::Transcription(_)
     ));
-    assert_eq!(
-        ime.events(),
-        vec!["开始输入", "取消输入", "结束输入"]
-    );
+    assert_eq!(ime.events(), vec!["开始输入", "取消输入", "结束输入"]);
 }

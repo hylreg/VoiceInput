@@ -70,4 +70,3 @@ impl InputMethodHost for MacInputMethodHost {
         self.bridge.end_composition()
     }
 }
-

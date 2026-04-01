@@ -1,5 +1,5 @@
 use voice_input_asr::{FunAsrConfig, LocalFunAsrTranscriber, MockFunAsrRunner};
-use voice_input_core::{Transcript, Transcriber};
+use voice_input_core::{Transcriber, Transcript};
 
 #[test]
 fn local_transcriber_uses_local_model_config() {

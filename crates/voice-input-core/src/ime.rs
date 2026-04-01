@@ -51,4 +51,3 @@ impl CompositionState {
         self.active = false;
     }
 }
-

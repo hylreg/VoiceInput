@@ -1,5 +1,5 @@
 use crate::config::FunAsrConfig;
-use voice_input_core::{Result, Transcript, VoiceInputError};
+use voice_input_core::Result;
 
 #[derive(Debug, Clone)]
 pub struct FunAsrRequest {
@@ -10,12 +10,3 @@ pub struct FunAsrRequest {
 pub trait FunAsrRunner {
     fn transcribe(&self, request: FunAsrRequest) -> Result<String>;
 }
-
-pub(crate) fn invalid_runner_error(message: impl Into<String>) -> VoiceInputError {
-    VoiceInputError::Transcription(message.into())
-}
-
-pub(crate) fn to_transcript(text: String) -> Transcript {
-    Transcript::new(text)
-}
-

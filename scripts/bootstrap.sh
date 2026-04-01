@@ -34,6 +34,8 @@ ensure_uv() {
 
 cd "$REPO_ROOT"
 
+export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-https://mirrors.aliyun.com/pypi/simple/}"
+
 ensure_cargo
 ensure_uv
 
@@ -75,13 +77,20 @@ EOF
 done
 
 echo "正在创建或更新 Python 虚拟环境：.venv"
-uv venv .venv
+UV_VENV_CLEAR=1 uv venv .venv
 
-echo "正在安装 Python 依赖"
-uv pip install -r scripts/requirements-asr.txt
+echo "正在安装模型下载依赖"
+uv pip install -r scripts/requirements-asr-base.txt
+
+echo "正在安装 ASR 运行时依赖"
+uv pip install -r scripts/requirements-asr-runtime.txt
 
 echo "正在部署本地 Fun-ASR 模型"
-uv run -- python scripts/deploy_funasr_model.py --skip-existing "${deploy_args[@]}"
+if [[ ${#deploy_args[@]} -gt 0 ]]; then
+  uv run -- python scripts/deploy_funasr_model.py --skip-existing "${deploy_args[@]}"
+else
+  uv run -- python scripts/deploy_funasr_model.py --skip-existing
+fi
 
 if [[ -n "$smoke_audio_file" ]]; then
   echo "正在运行 macOS smoke"

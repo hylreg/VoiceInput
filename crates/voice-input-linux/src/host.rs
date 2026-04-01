@@ -29,10 +29,7 @@ impl LinuxInputMethodHost {
         Self::new_with_backend(config, backend_from_kind(backend_kind))
     }
 
-    pub fn new_with_backend(
-        config: LinuxHostConfig,
-        backend: Box<dyn LinuxBackend>,
-    ) -> Self {
+    pub fn new_with_backend(config: LinuxHostConfig, backend: Box<dyn LinuxBackend>) -> Self {
         let session = LinuxCompositionSession::new(config.service_name.clone());
 
         Self {

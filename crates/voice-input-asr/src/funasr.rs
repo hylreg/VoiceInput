@@ -62,7 +62,10 @@ impl Default for PythonFunAsrRunner {
             return Self { python_bin };
         }
 
-        if std::env::var("VOICEINPUT_USE_UV").map(|v| v != "0").unwrap_or(true) {
+        if std::env::var("VOICEINPUT_USE_UV")
+            .map(|v| v != "0")
+            .unwrap_or(true)
+        {
             if which::which("uv").is_ok() {
                 return Self {
                     python_bin: "uv".to_string(),
@@ -115,7 +118,11 @@ impl FunAsrRunner for PythonFunAsrRunner {
                 .arg(if request.config.itn { "true" } else { "false" })
                 .arg(hotwords_json)
                 .output()
-                .map_err(|e| VoiceInputError::Transcription(format!("通过 uv 启动 FunASR Python 进程失败：{e}")))?
+                .map_err(|e| {
+                    VoiceInputError::Transcription(format!(
+                        "通过 uv 启动 FunASR Python 进程失败：{e}"
+                    ))
+                })?
         } else {
             Command::new(&self.python_bin)
                 .arg("-c")
@@ -128,7 +135,9 @@ impl FunAsrRunner for PythonFunAsrRunner {
                 .arg(if request.config.itn { "true" } else { "false" })
                 .arg(hotwords_json)
                 .output()
-                .map_err(|e| VoiceInputError::Transcription(format!("启动 FunASR Python 进程失败：{e}")))?
+                .map_err(|e| {
+                    VoiceInputError::Transcription(format!("启动 FunASR Python 进程失败：{e}"))
+                })?
         };
 
         if !output.status.success() {
@@ -138,8 +147,9 @@ impl FunAsrRunner for PythonFunAsrRunner {
             )));
         }
 
-        let text = String::from_utf8(output.stdout)
-            .map_err(|e| VoiceInputError::Transcription(format!("FunASR 输出不是有效的 UTF-8：{e}")))?;
+        let text = String::from_utf8(output.stdout).map_err(|e| {
+            VoiceInputError::Transcription(format!("FunASR 输出不是有效的 UTF-8：{e}"))
+        })?;
         Ok(text.trim().to_string())
     }
 }

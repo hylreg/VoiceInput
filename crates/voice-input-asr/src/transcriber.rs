@@ -1,6 +1,6 @@
 use crate::config::FunAsrConfig;
 use crate::runner::{FunAsrRequest, FunAsrRunner};
-use voice_input_core::{Result, Transcript, Transcriber};
+use voice_input_core::{Result, Transcriber, Transcript};
 
 pub struct LocalFunAsrTranscriber {
     config: FunAsrConfig,
@@ -27,4 +27,3 @@ impl Transcriber for LocalFunAsrTranscriber {
         Ok(Transcript::new(text))
     }
 }
-

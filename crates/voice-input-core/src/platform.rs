@@ -65,9 +65,7 @@ impl AudioRecorder for MockAudioRecorder {
 impl Transcriber for MockTranscriber {
     fn transcribe(&self, audio: &[u8]) -> Result<Transcript> {
         if audio.is_empty() {
-            return Err(VoiceInputError::Transcription(
-                "音频数据为空".to_string(),
-            ));
+            return Err(VoiceInputError::Transcription("音频数据为空".to_string()));
         }
 
         Ok(Transcript {

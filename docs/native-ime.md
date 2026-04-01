@@ -20,7 +20,7 @@
 - 通过类似 `setMarkedText` 的行为更新 composition
 - 通过原生的 insert / commit API 提交文本
 
-仓库里现在已经有一个 macOS host crate，用来隔离这层桥接。它还只是骨架，但正适合后面接真正的 `InputMethodKit` 对象。
+仓库里现在已经有一个 macOS host crate，用来隔离这层桥接。它现在已经能跑出一条可用闭环：全局热键触发、麦克风录音、本地 Fun-ASR 转写，然后把文本通过剪贴板提交到当前光标。后面如果要更原生，还可以继续把提交层替换成真正的 `InputMethodKit` 事件。
 
 现在 macOS crate 还带了一个 smoke binary，会读取本地音频文件并通过本地 Fun-ASR 模型转写：
 
@@ -28,14 +28,28 @@
 - 这个 smoke 路径建议使用 WAV/PCM 输入
 - 推荐命令是 `uv run -- cargo run -p voice-input-macos -- --audio-file /path/to/audio.wav`
 - 也可以用 `scripts/run_macos_smoke.sh`
+- 实时运行时已经支持热键开始/停止录音，并在结束后提交文本
+
+此外，仓库里还加了一个系统级 IME 入口：
+
+- `cargo run -p voice-input-macos --bin voice-input-macos-ime`
+- `cargo run -p voice-input-macos --bin voice-input-macos-app`
+- `voice-input-macos-ime` 是系统级入口，默认不显示菜单栏图标
+- `voice-input-macos-app` 是常驻菜单栏入口
+- 这两个入口当前都会启动同一套实时运行时
+- 当前提交动作先走剪贴板回填，后续还能替换成更原生的 IME commit
 
 Python 环境：
 
 - 用 `uv` 管理 ASR 依赖
 - 用 `uv venv .venv` 创建本地虚拟环境
-- 用 `uv pip install -r scripts/requirements-asr.txt` 安装依赖
+- 先用 `uv pip install -r scripts/requirements-asr-base.txt` 安装模型下载依赖
+- 再用 `uv pip install -r scripts/requirements-asr-runtime.txt` 安装运行时依赖
 - 在运行部署脚本或任何 Python ASR 命令之前，先 `source .venv/bin/activate`
 - Rust 侧的 FunASR runner 会优先使用 `uv run`，然后回退到 `.venv/bin/python`，最后才是 `python3`
+- 默认使用阿里云 PyPI 镜像；如果你有自己的镜像源，可以设置 `UV_DEFAULT_INDEX`
+- 依赖分成两层：`requirements-asr-base.txt` 负责模型下载，`requirements-asr-runtime.txt` 负责 FunASR 运行时，`requirements-asr.txt` 只是组合入口
+- 首次跑实时运行时之前，最好给应用授予“麦克风”和“辅助功能”权限
 
 ## Windows
 
@@ -92,16 +106,26 @@ Python 环境：
 - 默认本地缓存目录：`./models/FunAudioLLM/Fun-ASR-Nano-2512`
 - `voice-input-asr` 里的 Python runner 会使用 `FunAsrConfig` 里的本地模型目录、`remote_code`、`device`、`language` 和 `itn`
 - 用 [`scripts/deploy_funasr_model.py`](../scripts/deploy_funasr_model.py) 把模型下载到本地缓存目录
-- Python 依赖见 [`scripts/requirements-asr.txt`](../scripts/requirements-asr.txt)
+- Python 依赖见 [`scripts/requirements-asr-base.txt`](../scripts/requirements-asr-base.txt) 和 [`scripts/requirements-asr-runtime.txt`](../scripts/requirements-asr-runtime.txt)
 
 ### 推荐部署步骤
 
 1. `scripts/bootstrap.sh`
 2. 如果想在部署后直接验证，可以传入 `--audio-file /path/to/audio.wav`
 3. 或者手动执行 `uv venv .venv`
-4. `uv pip install -r scripts/requirements-asr.txt`
-5. `uv run -- python scripts/deploy_funasr_model.py --skip-existing`
-6. 确认模型目录存在于 `./models/FunAudioLLM/Fun-ASR-Nano-2512`
+4. `uv pip install -r scripts/requirements-asr-base.txt`
+5. `uv pip install -r scripts/requirements-asr-runtime.txt`
+6. `uv run -- python scripts/deploy_funasr_model.py --skip-existing`
+7. 确认模型目录存在于 `./models/FunAudioLLM/Fun-ASR-Nano-2512`
+8. `scripts/bootstrap.sh` 内部会先装 base 和 runtime，再部署模型，这样 Mac 上能正确检测 MPS
+
+### 系统级安装
+
+1. `scripts/package_macos_input_method.sh`
+2. 把 `dist/VoiceInput.app` 复制到 `~/Library/Input Methods/`
+3. 重新登录或重启输入法服务
+4. 系统输入法列表里选择 VoiceInput
+5. 首次运行前建议授予“麦克风”和“辅助功能”权限
 
 ### GPU 处理
 

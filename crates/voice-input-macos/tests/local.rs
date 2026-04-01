@@ -1,6 +1,8 @@
 use voice_input_asr::{FunAsrConfig, MockFunAsrRunner};
 use voice_input_core::{MockAudioRecorder, MockHotkeyManager};
-use voice_input_macos::{MacHostConfig, MacImeEvent, MacLocalVoiceInput, MacLocalVoiceInputConfig, MockMacImeBridge};
+use voice_input_macos::{
+    MacHostConfig, MacImeEvent, MacLocalVoiceInput, MacLocalVoiceInputConfig, MockMacImeBridge,
+};
 
 #[test]
 fn local_mac_pipeline_uses_funasr_and_drives_ime_events() {

@@ -45,7 +45,12 @@ fn host_forwards_events_to_backend_and_session() {
 
     assert_eq!(
         backend_for_assertions.events(),
-        vec!["开始输入", "更新预编辑：hello", "提交文本：hello world", "结束输入"]
+        vec![
+            "开始输入",
+            "更新预编辑：hello",
+            "提交文本：hello world",
+            "结束输入"
+        ]
     );
 }
 

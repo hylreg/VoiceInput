@@ -35,4 +35,3 @@ impl LinuxCompositionSession {
         self.state.inner.cancel();
     }
 }
-

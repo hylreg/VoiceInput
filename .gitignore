@@ -1,5 +1,6 @@
 # Rust build output
 target/
+dist/
 
 # Python virtual environments and caches
 .venv/
@@ -22,4 +23,3 @@ models/
 .vscode/
 *.swp
 *.swo
-

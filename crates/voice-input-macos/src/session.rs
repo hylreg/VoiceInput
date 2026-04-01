@@ -4,4 +4,3 @@ use voice_input_core::CompositionState;
 pub struct MacCompositionSession {
     pub inner: CompositionState,
 }
-
