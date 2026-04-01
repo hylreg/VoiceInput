@@ -78,12 +78,13 @@
 
 ## macOS 系统级 IME
 
-1. `scripts/package_macos_input_method.sh`
-2. 把生成的 `dist/VoiceInput.app` 复制到 `~/Library/Input Methods/`
-3. 重新登录或重启输入法服务
-4. 系统输入法列表里选择 VoiceInput
-5. 首次运行前建议授予“麦克风”和“辅助功能”权限，否则热键监听或录音可能失败
-6. 系统级入口优先走 `InputMethodKit` 提交，剪贴板只作为兜底
+1. 一键安装：`scripts/install_macos_input_method.sh`
+2. 只打包：`scripts/package_macos_input_method.sh`
+3. 安装脚本会把生成的 `dist/VoiceInput.app` 复制到 `~/Library/Input Methods/`
+4. 重新登录或重启输入法服务
+5. 系统输入法列表里选择 VoiceInput
+6. 首次运行前建议授予“麦克风”和“辅助功能”权限，否则热键监听或录音可能失败
+7. 系统级入口优先走 `InputMethodKit` 提交，剪贴板只作为兜底
 
 ## 还缺什么
 

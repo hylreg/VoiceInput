@@ -121,11 +121,12 @@ Python 环境：
 
 ### 系统级安装
 
-1. `scripts/package_macos_input_method.sh`
-2. 把 `dist/VoiceInput.app` 复制到 `~/Library/Input Methods/`
-3. 重新登录或重启输入法服务
-4. 系统输入法列表里选择 VoiceInput
-5. 首次运行前建议授予“麦克风”和“辅助功能”权限
+1. `scripts/install_macos_input_method.sh`
+2. 如果只想打包，不安装，可以运行 `scripts/package_macos_input_method.sh`
+3. 安装脚本会把 `dist/VoiceInput.app` 复制到 `~/Library/Input Methods/`
+4. 重新登录或重启输入法服务
+5. 系统输入法列表里选择 VoiceInput
+6. 首次运行前建议授予“麦克风”和“辅助功能”权限
 
 ### GPU 处理
 
