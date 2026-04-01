@@ -1,0 +1,12 @@
+[package]
+name = "voice-input-linux"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+ibus = ["dep:ibus"]
+
+[dependencies]
+voice-input-core = { path = "../voice-input-core" }
+ibus = { version = "0.2", optional = true }

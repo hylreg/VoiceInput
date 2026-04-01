@@ -1,0 +1,9 @@
+[package]
+name = "voice-input-macos"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+voice-input-core = { path = "../voice-input-core" }
+voice-input-asr = { path = "../voice-input-asr" }
+

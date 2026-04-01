@@ -1,0 +1,45 @@
+use voice_input_asr::{FunAsrConfig, MockFunAsrRunner};
+use voice_input_core::{MockAudioRecorder, MockHotkeyManager};
+use voice_input_macos::{MacHostConfig, MacImeEvent, MacLocalVoiceInput, MacLocalVoiceInputConfig, MockMacImeBridge};
+
+#[test]
+fn local_mac_pipeline_uses_funasr_and_drives_ime_events() {
+    let bridge = MockMacImeBridge::default();
+    let bridge_for_assertions = bridge.clone();
+    let runner = MockFunAsrRunner {
+        transcript: "本地语音输入".to_string(),
+        ..Default::default()
+    };
+    let calls = runner.calls.clone();
+    let pipeline = MacLocalVoiceInput::new(
+        MacLocalVoiceInputConfig {
+            host: MacHostConfig::default(),
+            asr: FunAsrConfig::default(),
+            app: voice_input_core::AppConfig::default(),
+        },
+        Box::new(MockHotkeyManager),
+        Box::new(MockAudioRecorder),
+        Box::new(runner),
+        Box::new(bridge),
+    );
+
+    let text = pipeline.run_once().expect("pipeline should succeed");
+
+    assert_eq!(text, "本地语音输入");
+    assert_eq!(
+        bridge_for_assertions.events(),
+        vec![
+            MacImeEvent::StartComposition,
+            MacImeEvent::UpdatePreedit("本地语音输入".to_string()),
+            MacImeEvent::CommitText("本地语音输入".to_string()),
+            MacImeEvent::EndComposition,
+        ]
+    );
+
+    let recorded = calls.lock().expect("calls lock").clone();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(
+        recorded[0].source_url,
+        "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
+    );
+}

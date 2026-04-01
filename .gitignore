@@ -1,0 +1,25 @@
+# Rust build output
+target/
+
+# Python virtual environments and caches
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+*.pyo
+
+# Local model cache and other generated assets
+models/
+
+# macOS metadata
+.DS_Store
+
+# Editor and OS noise
+.idea/
+.vscode/
+*.swp
+*.swo
+

@@ -1,0 +1,9 @@
+[package]
+name = "voice-input-asr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tempfile = "3"
+voice-input-core = { path = "../voice-input-core" }
+which = "6"

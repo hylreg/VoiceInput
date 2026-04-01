@@ -1,0 +1,125 @@
+# 原生 IME 方案
+
+这个项目应该按“共享 Rust core + 三个平台宿主”的方式来实现。
+
+## 共享 core 负责什么
+
+- 热键处理
+- 录音会话控制
+- 把部分转写结果更新到 preedit
+- 提交最终文本
+- 取消并清理 composition
+
+## macOS
+
+使用 `InputMethodKit`。
+
+原生宿主应该负责：
+
+- 接收系统输入法管线里的按键事件
+- 通过类似 `setMarkedText` 的行为更新 composition
+- 通过原生的 insert / commit API 提交文本
+
+仓库里现在已经有一个 macOS host crate，用来隔离这层桥接。它还只是骨架，但正适合后面接真正的 `InputMethodKit` 对象。
+
+现在 macOS crate 还带了一个 smoke binary，会读取本地音频文件并通过本地 Fun-ASR 模型转写：
+
+- `cargo run -p voice-input-macos -- --audio-file /path/to/audio.wav`
+- 这个 smoke 路径建议使用 WAV/PCM 输入
+- 推荐命令是 `uv run -- cargo run -p voice-input-macos -- --audio-file /path/to/audio.wav`
+- 也可以用 `scripts/run_macos_smoke.sh`
+
+Python 环境：
+
+- 用 `uv` 管理 ASR 依赖
+- 用 `uv venv .venv` 创建本地虚拟环境
+- 用 `uv pip install -r scripts/requirements-asr.txt` 安装依赖
+- 在运行部署脚本或任何 Python ASR 命令之前，先 `source .venv/bin/activate`
+- Rust 侧的 FunASR runner 会优先使用 `uv run`，然后回退到 `.venv/bin/python`，最后才是 `python3`
+
+## Windows
+
+使用 `TSF`。
+
+原生宿主应该负责：
+
+- 实现 text service
+- 暴露 COM 对象用于 composition
+- 通过 TSF API 更新 composition 字符串并提交最终文本
+
+## Linux
+
+使用 `IBus` 或 `Fcitx5`。
+
+原生宿主应该负责：
+
+- 作为 input method engine service 运行
+- 把 preedit 文本推给 engine context
+- 把最终文本提交到当前焦点窗口
+
+仓库里现在已经有 Linux host crate，并把后端拆成了 IBus / Fcitx5 两层。剩下的工作是把后端 trait 绑定到真实的 IBus / Fcitx5 API。
+
+### IBus 依赖选择
+
+- IBus 这条线优先用 `ibus` crate 作为 Rust 绑定层
+- 这个 crate 已经建模了 `Bus`、`Input Context`、`Commit Text Signal`、`Update Preedit Text Signal`，并且 reexport 了 `dbus`
+- 不要把 `glib` 拉进 IME core，除非后面你要加 GTK / GObject 风格的 UI
+- `glib` 更适合作为未来 UI 层依赖，而不是 core 依赖
+
+### 当前 IBus 侧已经接上的真实 crate API
+
+- `Bus::new`
+- `Bus::create_input_context`
+- `InputContext::set_capabilities`
+- `InputContext::focus_in`
+- `InputContext::set_surrounding_text`
+- `InputContext::reset`
+- `InputContext::focus_out`
+- `InputContext::on_update_preedit_text`
+- `InputContext::on_commit_text`
+- `InputContext::on_show_preedit_text`
+- `InputContext::on_hide_preedit_text`
+
+对 IBus 来说，桥接层应该对应官方文档里的 engine 生命周期，尤其是：
+
+- `ibus_engine_update_preedit_text`
+- `ibus_engine_commit_text`
+- composition cleanup
+
+## 本地 ASR 来源
+
+- ModelScope 模型页：`https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512`
+- 默认本地缓存目录：`./models/FunAudioLLM/Fun-ASR-Nano-2512`
+- `voice-input-asr` 里的 Python runner 会使用 `FunAsrConfig` 里的本地模型目录、`remote_code`、`device`、`language` 和 `itn`
+- 用 [`scripts/deploy_funasr_model.py`](../scripts/deploy_funasr_model.py) 把模型下载到本地缓存目录
+- Python 依赖见 [`scripts/requirements-asr.txt`](../scripts/requirements-asr.txt)
+
+### 推荐部署步骤
+
+1. `scripts/bootstrap.sh`
+2. 如果想在部署后直接验证，可以传入 `--audio-file /path/to/audio.wav`
+3. 或者手动执行 `uv venv .venv`
+4. `uv pip install -r scripts/requirements-asr.txt`
+5. `uv run -- python scripts/deploy_funasr_model.py --skip-existing`
+6. 确认模型目录存在于 `./models/FunAudioLLM/Fun-ASR-Nano-2512`
+
+### GPU 处理
+
+- 部署脚本会在 Linux / Windows 上自动检测 NVIDIA GPU
+- 如果检测到 NVIDIA，就把 inference hint 设为 `cuda`
+- 在 macOS 上，会检测 PyTorch 的 MPS 支持，存在时选择 `mps`
+- 它不会自动安装 CUDA。你仍然需要在运行推理的机器上准备好 CUDA 版 PyTorch 和匹配的 NVIDIA 驱动 / runtime
+- 如果你想让脚本在 NVIDIA 机器上安装 CUDA 版 PyTorch wheels，可以使用 `--install-cuda`
+
+### Smoke 路径
+
+- `uv run -- cargo run -p voice-input-macos -- --audio-file /path/to/audio.wav`
+- 或者 `scripts/run_macos_smoke.sh --audio-file /path/to/audio.wav`
+- 或者直接 `scripts/bootstrap.sh --audio-file /path/to/audio.wav`
+
+## 推荐推进顺序
+
+1. 先把 core 状态机定死
+2. 再做一个平台宿主跑通端到端
+3. 然后把宿主边界推广到其他平台
+4. 最后补转写后端的完整集成
