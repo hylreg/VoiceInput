@@ -15,14 +15,18 @@ impl LocalFunAsrTranscriber {
     pub fn config(&self) -> &FunAsrConfig {
         &self.config
     }
+
+    pub fn transcribe_allow_empty(&self, audio: &[u8]) -> Result<String> {
+        self.runner.transcribe(FunAsrRequest {
+            audio_bytes: audio.to_vec(),
+            config: self.config.clone(),
+        })
+    }
 }
 
 impl Transcriber for LocalFunAsrTranscriber {
     fn transcribe(&self, audio: &[u8]) -> Result<Transcript> {
-        let text = self.runner.transcribe(FunAsrRequest {
-            audio_bytes: audio.to_vec(),
-            config: self.config.clone(),
-        })?;
+        let text = self.transcribe_allow_empty(audio)?;
 
         if text.trim().is_empty() {
             return Err(VoiceInputError::Transcription(

@@ -24,11 +24,18 @@ fn main() {
     let effective_window_ms = args
         .double_ctrl_window_ms
         .unwrap_or(persisted_settings.double_ctrl_window_ms);
+    let effective_silence_stop_ms = args
+        .silence_stop_ms
+        .unwrap_or(persisted_settings.silence_stop_timeout_ms);
 
     println!("配置文件：{}", settings_path().display());
     println!(
         "已加载双击间隔：{}ms，生效值：{}ms",
         persisted_settings.double_ctrl_window_ms, effective_window_ms
+    );
+    println!(
+        "已加载静音停录：{}ms，生效值：{}ms",
+        persisted_settings.silence_stop_timeout_ms, effective_silence_stop_ms
     );
 
     let config = LinuxLiveAppConfig {
@@ -38,11 +45,13 @@ fn main() {
         },
         max_recording_duration: Duration::from_secs(12),
         double_ctrl_window: Duration::from_millis(effective_window_ms),
+        silence_stop_timeout: Duration::from_millis(effective_silence_stop_ms),
         ..Default::default()
     };
 
     let settings = LinuxAppSettings {
         double_ctrl_window_ms: effective_window_ms,
+        silence_stop_timeout_ms: effective_silence_stop_ms,
     };
 
     if let Err(err) = settings.save() {
@@ -72,12 +81,14 @@ fn main() {
 struct Args {
     backend: LinuxBackendKind,
     double_ctrl_window_ms: Option<u64>,
+    silence_stop_ms: Option<u64>,
 }
 
 impl Args {
     fn parse(args: Vec<String>) -> Result<Self, String> {
         let mut backend = LinuxBackendKind::IBus;
         let mut double_ctrl_window_ms = None;
+        let mut silence_stop_ms = None;
         let mut iter = args.into_iter();
         let _bin = iter.next();
 
@@ -97,6 +108,14 @@ impl Args {
                         .parse::<u64>()
                         .map_err(|_| String::from("--double-ctrl-window-ms 必须是整数毫秒"))?);
                 }
+                "--silence-stop-ms" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| String::from("缺少 --silence-stop-ms 的值"))?;
+                    silence_stop_ms = Some(value
+                        .parse::<u64>()
+                        .map_err(|_| String::from("--silence-stop-ms 必须是整数毫秒"))?);
+                }
                 "--help" | "-h" => return Err(String::from("help")),
                 other => return Err(format!("不支持的参数：{other}")),
             }
@@ -105,6 +124,7 @@ impl Args {
         Ok(Self {
             backend,
             double_ctrl_window_ms,
+            silence_stop_ms,
         })
     }
 }
@@ -119,6 +139,6 @@ fn parse_backend(value: &str) -> Result<LinuxBackendKind, String> {
 
 fn print_usage() {
     eprintln!(
-        "用法：cargo run -p voice-input-linux --bin voice-input-linux-app -- --backend ibus [--double-ctrl-window-ms 200]"
+        "用法：cargo run -p voice-input-linux --bin voice-input-linux-app -- --backend ibus [--double-ctrl-window-ms 200] [--silence-stop-ms 900]"
     );
 }

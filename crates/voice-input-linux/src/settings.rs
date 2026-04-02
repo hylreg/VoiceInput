@@ -5,14 +5,17 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LinuxAppSettings {
     pub double_ctrl_window_ms: u64,
+    pub silence_stop_timeout_ms: u64,
 }
 
 impl Default for LinuxAppSettings {
     fn default() -> Self {
         Self {
             double_ctrl_window_ms: 200,
+            silence_stop_timeout_ms: 900,
         }
     }
 }

@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "ibus")]
 use std::process::Command;
+#[cfg(feature = "ibus")]
 use std::thread;
+#[cfg(feature = "ibus")]
 use std::time::Duration;
 
 use crate::backend::LinuxBackendKind;
@@ -377,7 +380,7 @@ impl crate::backend::LinuxBackend for IbusBackend {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "ibus"))]
 fn paste_text_into_active_window(text: &str) -> Result<()> {
     let mut clipboard = arboard::Clipboard::new()
         .map_err(|e| VoiceInputError::Injection(format!("打开系统剪贴板失败：{e}")))?;

@@ -3,7 +3,10 @@
 #[cfg(target_os = "linux")]
 mod linux_runtime {
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{self, RecvTimeoutError};
     use std::sync::Arc;
+    use std::io::{self, Write};
+    use std::thread;
     use std::time::Duration;
 
     use crate::backend::{LinuxBackendKind};
@@ -11,8 +14,8 @@ mod linux_runtime {
     use crate::host::{LinuxHostConfig, LinuxInputMethodHost};
     use crate::recorder::LinuxMicAudioRecorder;
     use crate::tray::{spawn_linux_tray, LinuxTrayConfig};
-    use voice_input_asr::{FunAsrConfig, LocalFunAsrTranscriber, PythonFunAsrRunner};
-    use voice_input_core::{AppConfig, AppController, MockHotkeyManager, Result};
+    use voice_input_asr::{FunAsrConfig, PythonFunAsrStreamingRunner};
+    use voice_input_core::{AppConfig, InputMethodHost, Result};
 
     #[derive(Debug, Clone)]
     pub struct LinuxLiveAppConfig {
@@ -21,6 +24,7 @@ mod linux_runtime {
         pub asr: FunAsrConfig,
         pub max_recording_duration: Duration,
         pub double_ctrl_window: Duration,
+        pub silence_stop_timeout: Duration,
         pub show_status_item: bool,
     }
 
@@ -38,9 +42,19 @@ mod linux_runtime {
                 asr: FunAsrConfig::default(),
                 max_recording_duration: Duration::from_secs(12),
                 double_ctrl_window: Duration::from_millis(200),
+                silence_stop_timeout: Duration::from_millis(900),
                 show_status_item: true,
             }
         }
+    }
+
+    enum RecordingEvent {
+        Chunk {
+            sample_rate: u32,
+            samples: Vec<i16>,
+            is_final: bool,
+        },
+        Finished(voice_input_core::Result<Vec<u8>>),
     }
 
     fn describe_activation_hotkey(spec: &str, double_ctrl_window: Duration) -> String {
@@ -57,13 +71,102 @@ mod linux_runtime {
         }
     }
 
+    fn run_streaming_session(
+        recorder: LinuxMicAudioRecorder,
+        host: &LinuxInputMethodHost,
+        asr: &PythonFunAsrStreamingRunner,
+        silence_stop_timeout: Duration,
+    ) -> Result<String> {
+        const STREAM_CHUNK_INTERVAL: Duration = Duration::from_millis(200);
+
+        let (event_tx, event_rx) = mpsc::channel::<RecordingEvent>();
+        let recorder_for_thread = recorder.clone();
+
+        thread::spawn(move || {
+            let result = recorder_for_thread.record_once_with_chunks(
+                STREAM_CHUNK_INTERVAL,
+                silence_stop_timeout,
+                |sample_rate, samples, is_final| {
+                    let _ = event_tx.send(RecordingEvent::Chunk {
+                        sample_rate,
+                        samples,
+                        is_final,
+                    });
+                },
+            );
+            let _ = event_tx.send(RecordingEvent::Finished(result));
+        });
+
+        let mut last_preview = String::new();
+        let mut final_text = None;
+
+        loop {
+            match event_rx.recv_timeout(Duration::from_millis(120)) {
+                Ok(RecordingEvent::Chunk {
+                    sample_rate,
+                    samples,
+                    is_final,
+                }) => match asr.stream_chunk(&samples, sample_rate, is_final) {
+                    Ok(text) => {
+                        let preview = text.trim().to_string();
+                        if !preview.is_empty() && preview != last_preview {
+                            render_preview(&preview);
+                            host.update_preedit(&preview)?;
+                            last_preview = preview.clone();
+                        }
+
+                        if is_final {
+                            final_text = Some(preview);
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("流式预览失败：{err}");
+                    }
+                },
+                Ok(RecordingEvent::Finished(result)) => {
+                    result?;
+                    break;
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(voice_input_core::VoiceInputError::Audio(
+                        "流式录音线程已断开".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let final_text = final_text.unwrap_or_else(|| last_preview.clone()).trim().to_string();
+        if final_text.is_empty() {
+            return Err(voice_input_core::VoiceInputError::Transcription(
+                "FunASR 没有返回识别文本，请检查麦克风输入、录音时长或环境噪声".to_string(),
+            ));
+        }
+
+        if final_text != last_preview {
+            render_preview(&final_text);
+            host.update_preedit(&final_text)?;
+        }
+        println!();
+        host.commit_text(&final_text)?;
+        host.end_composition()?;
+
+        Ok(final_text)
+    }
+
+    fn render_preview(text: &str) {
+        print!("\r\x1b[2K预览：{text}");
+        let _ = io::stdout().flush();
+    }
+
     pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
         let recorder = LinuxMicAudioRecorder::new(config.max_recording_duration);
         let recorder_for_watcher = recorder.clone();
         let active = Arc::new(AtomicBool::new(false));
         let active_for_watcher = Arc::clone(&active);
         let quit_requested = Arc::new(AtomicBool::new(false));
-        let hotkey = LinuxHotkeySpec::parse(&config.app.activation_hotkey)?;
+        let activation_hotkey = config.app.activation_hotkey.clone();
+        let hotkey = LinuxHotkeySpec::parse(&activation_hotkey)?;
         let watcher = LinuxHotkeyWatcher::spawn(
             hotkey,
             active_for_watcher,
@@ -71,17 +174,9 @@ mod linux_runtime {
             config.double_ctrl_window,
         )?;
         let host = LinuxInputMethodHost::new(config.host.clone());
-        println!("正在预加载 FunASR 模型...");
-        let asr_runner = PythonFunAsrRunner::connect(config.asr.clone())?;
-        println!("FunASR 模型预加载完成");
-        let transcriber = LocalFunAsrTranscriber::new(config.asr, Box::new(asr_runner));
-        let controller = AppController::new(
-            config.app,
-            Box::new(MockHotkeyManager),
-            Box::new(recorder.clone()),
-            Box::new(transcriber),
-            Box::new(host),
-        );
+        println!("正在预加载 FunASR 流式模型...");
+        let streaming_asr = PythonFunAsrStreamingRunner::connect(config.asr.clone())?;
+        println!("FunASR 流式模型预加载完成");
         let tray = if config.show_status_item {
             let tray = spawn_linux_tray(LinuxTrayConfig::new(
                 config.host.service_name.clone(),
@@ -98,9 +193,11 @@ mod linux_runtime {
         println!("VoiceInput Linux 常驻应用已启动");
         println!(
             "热键：{}",
-            describe_activation_hotkey(&controller.config.activation_hotkey, config.double_ctrl_window)
+            describe_activation_hotkey(&activation_hotkey, config.double_ctrl_window)
         );
         println!("双击间隔：{}ms", config.double_ctrl_window.as_millis());
+        println!("静音自动停录：{}ms", config.silence_stop_timeout.as_millis());
+        println!("流式 chunk：200ms，16kHz 送入 FunASR");
         println!("说明：按一次开始录音，再按一次停止并转写");
         if config.show_status_item {
             println!("状态提示：已启用");
@@ -129,7 +226,21 @@ mod linux_runtime {
             }
 
             println!("正在录音...");
-            let outcome = controller.process_once();
+            if let Err(err) = host.start_composition() {
+                eprintln!("Linux 常驻输入失败：{err}");
+                active.store(false, Ordering::SeqCst);
+                if let Some(tray) = tray.as_ref() {
+                    tray.set_recording(false);
+                }
+                continue;
+            }
+
+            let outcome = run_streaming_session(
+                recorder.clone(),
+                &host,
+                &streaming_asr,
+                config.silence_stop_timeout,
+            );
             active.store(false, Ordering::SeqCst);
 
             if let Some(tray) = tray.as_ref() {
@@ -145,6 +256,9 @@ mod linux_runtime {
                     println!("识别结果：{text}");
                 }
                 Err(err) => {
+                    recorder.stop();
+                    let _ = host.cancel_composition();
+                    let _ = host.end_composition();
                     eprintln!("Linux 常驻输入失败：{err}");
                 }
             }
@@ -175,6 +289,7 @@ mod not_linux {
         pub asr: FunAsrConfig,
         pub max_recording_duration: Duration,
         pub double_ctrl_window: Duration,
+        pub silence_stop_timeout: Duration,
         pub show_status_item: bool,
     }
 
@@ -186,6 +301,7 @@ mod not_linux {
                 asr: FunAsrConfig::default(),
                 max_recording_duration: Duration::from_secs(12),
                 double_ctrl_window: Duration::from_millis(200),
+                silence_stop_timeout: Duration::from_millis(900),
                 show_status_item: false,
             }
         }

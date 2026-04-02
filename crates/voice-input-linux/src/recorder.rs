@@ -77,11 +77,16 @@ impl LinuxMicAudioRecorder {
         self.inner.stop_requested.store(false, Ordering::SeqCst);
         self.inner.gate.1.notify_all();
     }
-}
 
-#[cfg(target_os = "linux")]
-impl AudioRecorder for LinuxMicAudioRecorder {
-    fn record_once(&self) -> Result<Vec<u8>> {
+    pub fn record_once_with_chunks<F>(
+        &self,
+        chunk_interval: Duration,
+        silence_stop_timeout: Duration,
+        mut on_snapshot: F,
+    ) -> Result<Vec<u8>>
+    where
+        F: FnMut(u32, Vec<i16>, bool),
+    {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
         if self
@@ -111,6 +116,10 @@ impl AudioRecorder for LinuxMicAudioRecorder {
         let channels = usize::from(stream_config.channels.max(1));
         let samples = Arc::new(Mutex::new(Vec::<i16>::new()));
         let samples_for_stream = samples.clone();
+        let mut last_chunk_len = 0usize;
+        let mut last_chunk_at = Instant::now();
+        let mut last_voice_at = Instant::now();
+        let mut saw_voice_activity = false;
 
         let stream = match supported_config.sample_format() {
             cpal::SampleFormat::F32 => device
@@ -169,6 +178,34 @@ impl AudioRecorder for LinuxMicAudioRecorder {
                 break;
             }
 
+            if !chunk_interval.is_zero() && last_chunk_at.elapsed() >= chunk_interval {
+                if let Ok(current) = samples.lock() {
+                    if current.len() > last_chunk_len {
+                        let new_samples = &current[last_chunk_len..];
+                        if has_voice_activity(new_samples) {
+                            saw_voice_activity = true;
+                            last_voice_at = Instant::now();
+                        }
+
+                        last_chunk_len = current.len();
+                        on_snapshot(sample_rate, new_samples.to_vec(), false);
+                    }
+                }
+                last_chunk_at = Instant::now();
+            }
+
+            if !silence_stop_timeout.is_zero()
+                && saw_voice_activity
+                && last_voice_at.elapsed() >= silence_stop_timeout
+            {
+                eprintln!(
+                    "检测到持续静音，自动结束录音（{}ms）...",
+                    silence_stop_timeout.as_millis()
+                );
+                self.stop();
+                break;
+            }
+
             let guard = self.inner.gate.0.lock().map_err(|_| {
                 self.finish();
                 VoiceInputError::Audio("等待停止信号失败".to_string())
@@ -198,6 +235,12 @@ impl AudioRecorder for LinuxMicAudioRecorder {
 
         self.finish();
 
+        if captured.len() > last_chunk_len {
+            on_snapshot(sample_rate, captured[last_chunk_len..].to_vec(), true);
+        } else {
+            on_snapshot(sample_rate, Vec::new(), true);
+        }
+
         if captured.is_empty() {
             return Err(VoiceInputError::Audio("没有录到有效音频".to_string()));
         }
@@ -211,6 +254,36 @@ impl AudioRecorder for LinuxMicAudioRecorder {
 
         write_pcm_wav(&captured, sample_rate)
     }
+}
+
+#[cfg(target_os = "linux")]
+impl AudioRecorder for LinuxMicAudioRecorder {
+    fn record_once(&self) -> Result<Vec<u8>> {
+        self.record_once_with_chunks(
+            Duration::from_millis(0),
+            Duration::from_millis(0),
+            |_, _, _| {},
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn has_voice_activity(samples: &[i16]) -> bool {
+    const RMS_THRESHOLD: f64 = 650.0;
+    if samples.is_empty() {
+        return false;
+    }
+
+    let energy = samples
+        .iter()
+        .map(|sample| {
+            let value = i64::from(*sample);
+            value * value
+        })
+        .sum::<i64>() as f64
+        / samples.len() as f64;
+
+    energy.sqrt() >= RMS_THRESHOLD
 }
 
 #[cfg(target_os = "linux")]
