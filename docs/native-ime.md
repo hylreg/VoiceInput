@@ -20,7 +20,7 @@
 - 通过类似 `setMarkedText` 的行为更新 composition
 - 通过原生的 insert / commit API 提交文本
 
-仓库里现在已经有一个 macOS host crate，用来隔离这层桥接。它现在已经能跑出一条可用闭环：全局热键触发、麦克风录音、本地 Fun-ASR 转写，然后把文本通过剪贴板提交到当前光标。后面如果要更原生，还可以继续把提交层替换成真正的 `InputMethodKit` 事件。
+仓库里现在已经有一个 macOS host crate，用来隔离这层桥接。它现在已经能跑出一条可用闭环：全局热键触发、麦克风录音、本地 Fun-ASR 转写，然后优先通过 `InputMethodKit` / Accessibility 注入把文本送到当前光标，最后才会回退到剪贴板。后面如果要更原生，还可以继续把提交层完全收束到真正的 `InputMethodKit` 事件。
 
 现在 macOS crate 还带了一个 smoke binary，会读取本地音频文件并通过本地 Fun-ASR 模型转写：
 
@@ -37,7 +37,7 @@
 - `voice-input-macos-ime` 是系统级入口，默认不显示菜单栏图标
 - `voice-input-macos-app` 是常驻菜单栏入口
 - 这两个入口当前都会启动同一套实时运行时
-- 当前提交动作先走剪贴板回填，后续还能替换成更原生的 IME commit
+- 当前提交动作优先走 `InputMethodKit` 和 Accessibility 注入，Unicode 事件作为次级兜底，剪贴板只作为最后兜底
 
 Python 环境：
 
@@ -123,10 +123,25 @@ Python 环境：
 
 1. `scripts/install_macos_input_method.sh`
 2. 如果只想打包，不安装，可以运行 `scripts/package_macos_input_method.sh`
-3. 安装脚本会把 `dist/VoiceInput.app` 复制到 `~/Library/Input Methods/`
-4. 重新登录或重启输入法服务
-5. 系统输入法列表里选择 VoiceInput
-6. 首次运行前建议授予“麦克风”和“辅助功能”权限
+3. 日常调试刷新可以运行 `scripts/reinstall_macos_input_method.sh`
+4. 如果要把已安装的 VoiceInput 注册进 pluginkit，并把它写进当前用户的输入法偏好，可以运行 `scripts/enable_voiceinput_input_method.sh`
+5. 如果想一条命令完成打包 + 刷新 + 启用，可以运行 `scripts/dev_install_macos_input_method.sh`
+6. 如果要看系统到底有没有登记这个输入法，可以运行 `scripts/dump_macos_input_source_state.sh`
+7. 安装脚本会把 `dist/VoiceInput.app` 复制到 `~/Library/Input Methods/`
+8. 这个包现在包含一个容器 app 和一个 `Contents/PlugIns/VoiceInput.appex` extension
+9. 安装脚本和调试刷新脚本都会自动执行 `scripts/enable_voiceinput_input_method.sh`
+10. 重新登录或重启输入法服务
+11. 系统输入法列表里选择 VoiceInput
+12. 首次运行前建议授予“麦克风”和“辅助功能”权限
+
+如果系统输入法列表里找不到 `VoiceInput`，先按这个顺序检查：
+
+1. `ls ~/Library/Input\ Methods/VoiceInput.app`
+2. 如果文件不存在，说明安装没有完成，重新运行安装脚本
+3. 如果文件存在，先注销再登录一次，或者重启系统输入法相关服务
+4. 如果 bundle 是从下载包或外部目录拷贝来的，再执行：`xattr -dr com.apple.quarantine ~/Library/Input\ Methods/VoiceInput.app`
+5. 仍然没有出现时，回看安装日志里是否有编译、复制或权限错误
+6. 运行 `scripts/dump_macos_input_source_state.sh` 看 `VoiceInput` 是否已经进入 TIS 列表，以及 extension 是否存在
 
 ### GPU 处理
 

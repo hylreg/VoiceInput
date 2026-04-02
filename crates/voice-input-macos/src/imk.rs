@@ -9,11 +9,14 @@ use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel};
 use objc::{msg_send, sel, sel_impl};
 
-use crate::bridge::{ClipboardMacImeBridge, MacImeBridge};
+use crate::bridge::MacImeBridge;
+#[cfg(target_os = "macos")]
+use crate::bridge::paste_text_and_restore_clipboard;
 use voice_input_core::Result;
 
 static ACTIVE_CONTROLLER: AtomicPtr<Object> = AtomicPtr::new(ptr::null_mut());
 static REGISTER_CONTROLLER: Once = Once::new();
+static REGISTER_EXTENSION_DELEGATE: Once = Once::new();
 
 #[cfg(target_os = "macos")]
 pub fn register_input_controller_class() {
@@ -33,10 +36,22 @@ pub fn register_input_controller_class() {
         );
         decl.register();
     });
+
+    register_extension_delegate_class();
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn register_input_controller_class() {}
+
+#[cfg(target_os = "macos")]
+fn register_extension_delegate_class() {
+    REGISTER_EXTENSION_DELEGATE.call_once(|| {
+        let superclass = Class::get("NSObject").expect("Objective-C 未提供 NSObject");
+        let decl = ClassDecl::new("VoiceInputExtensionDelegate", superclass)
+            .expect("注册输入法扩展代理类");
+        decl.register();
+    });
+}
 
 #[cfg(target_os = "macos")]
 extern "C" fn voiceinput_init(this: &mut Object, _cmd: Sel, server: id, delegate: id, client: id) -> id {
@@ -125,7 +140,8 @@ impl MacImeBridge for InputMethodKitMacImeBridge {
         if let Some(controller) = active_controller() {
             unsafe {
                 let string = NSString::alloc(nil).init_str(text);
-                let range = NSRange::new(0, text.encode_utf16().count() as u64);
+                let caret = text.encode_utf16().count() as u64;
+                let range = NSRange::new(caret, 0);
                 let _: () = msg_send![controller, setMarkedText:string selectedRange:range replacementRange:NSRange::new(0, 0)];
             }
         }
@@ -142,7 +158,7 @@ impl MacImeBridge for InputMethodKitMacImeBridge {
             return Ok(());
         }
 
-        ClipboardMacImeBridge::default().commit_text(text)
+        paste_text_and_restore_clipboard(text)
     }
 
     fn cancel_composition(&self) -> Result<()> {

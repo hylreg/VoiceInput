@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_ROOT"
+source scripts/macos_input_method_common.sh
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "这个一键安装脚本只能在 macOS 上运行。" >&2
@@ -39,6 +40,7 @@ while [[ $# -gt 0 ]]; do
   - 先创建 Python 环境并下载本地模型
   - 再打包系统级 macOS 输入法应用
   - 最后复制到 ~/Library/Input Methods/
+  - 安装完成后会自动执行启用脚本
   - 如果传入 --audio-file，会在安装后自动运行一次 smoke 验证
 EOF
       exit 0
@@ -61,12 +63,12 @@ APP_BUNDLE="dist/VoiceInput.app"
 TARGET_BUNDLE="$INSTALL_DIR/VoiceInput.app"
 
 echo "正在安装到系统输入法目录：$TARGET_BUNDLE"
-mkdir -p "$INSTALL_DIR"
-rm -rf "$TARGET_BUNDLE"
-cp -R "$APP_BUNDLE" "$TARGET_BUNDLE"
+TARGET_BUNDLE="$(voiceinput_install_bundle "$APP_BUNDLE" "$INSTALL_DIR")"
 
 echo "安装完成"
 echo "已安装到：$TARGET_BUNDLE"
+echo "正在启用系统输入法"
+voiceinput_enable_bundle "$TARGET_BUNDLE"
 echo "请重新登录或重启输入法服务，然后在系统输入法列表中启用 VoiceInput"
 echo "首次运行前建议授予“麦克风”和“辅助功能”权限"
 

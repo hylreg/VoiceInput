@@ -11,7 +11,7 @@
 3. 提交最终文本
 4. 出错时干净地取消
 
-共享 Rust core 负责这条流程。各个平台宿主负责把它翻译成原生输入法 API。macOS 这条线现在已经补出一个可运行的闭环：全局热键触发、麦克风录音、本地 Fun-ASR 转写，系统级入口优先通过 `InputMethodKit` 提交，找不到活跃 controller 时再回退到剪贴板。
+共享 Rust core 负责这条流程。各个平台宿主负责把它翻译成原生输入法 API。macOS 这条线现在已经补出一个可运行的闭环：全局热键触发、麦克风录音、本地 Fun-ASR 转写，系统级入口优先通过 `InputMethodKit` 提交，找不到活跃 controller 时先尝试 Accessibility 注入，再退到 Unicode 事件输入，最后才回退到剪贴板。
 
 ## 平台目标
 
@@ -51,6 +51,21 @@
 - 在 macOS 上自动检测 MPS，在 Linux/Windows 上自动检测 NVIDIA CUDA；默认不自动安装 CUDA，但可通过 `--install-cuda` 触发安装 CUDA 版 PyTorch wheels
 - 部署脚本提供 `--install-cuda` 选项，用于 NVIDIA 机器安装 CUDA 版 PyTorch wheels
 
+## 脚本入口
+
+仓库里的脚本按职责拆分，命名也对应这些职责：
+
+- `scripts/bootstrap.sh`：准备 Python 环境、安装 ASR 依赖、下载本地模型
+- `scripts/run_macos_smoke.sh`：跑 macOS smoke 验证
+- `scripts/package_macos_input_method.sh`：打包 macOS 输入法容器 + `textinputmethod-services` extension
+- `scripts/install_macos_input_method.sh`：打包并安装 macOS 输入法到系统目录，并自动启用
+- `scripts/reinstall_macos_input_method.sh`：把现成的 macOS 输入法包刷新到系统目录，并自动启用
+- `scripts/enable_voiceinput_input_method.sh`：把已安装的 VoiceInput 注册进 pluginkit，并写入当前用户输入法偏好
+- `scripts/dev_install_macos_input_method.sh`：打包后立刻刷新到系统目录并自动启用，适合开发调试
+- `scripts/dump_macos_input_source_state.sh`：导出 HIToolbox、TIS 和 Launch Services 的输入法状态
+- `scripts/install_linux_voice_input.sh`：Linux 一键安装和启动
+- `scripts/run_linux_smoke.sh`：跑 Linux smoke 验证
+
 ## Python 环境
 
 1. `uv venv .venv`
@@ -83,11 +98,31 @@
 
 1. 一键安装：`scripts/install_macos_input_method.sh`
 2. 只打包：`scripts/package_macos_input_method.sh`
-3. 安装脚本会把生成的 `dist/VoiceInput.app` 复制到 `~/Library/Input Methods/`
-4. 重新登录或重启输入法服务
-5. 系统输入法列表里选择 VoiceInput
-6. 首次运行前建议授予“麦克风”和“辅助功能”权限，否则热键监听或录音可能失败
-7. 系统级入口优先走 `InputMethodKit` 提交，剪贴板只作为兜底
+3. 调试刷新：`scripts/reinstall_macos_input_method.sh`
+4. 启用当前输入法：`scripts/enable_voiceinput_input_method.sh`
+5. 开发一键刷新：`scripts/dev_install_macos_input_method.sh`
+6. 安装脚本会把生成的 `dist/VoiceInput.app` 复制到 `~/Library/Input Methods/`
+7. 这个包现在包含一个容器 app 和一个 `Contents/PlugIns/VoiceInput.appex` extension
+8. 安装脚本和调试刷新脚本都会自动执行 `scripts/enable_voiceinput_input_method.sh`
+9. 重新登录或重启输入法服务
+10. 系统输入法列表里选择 VoiceInput
+11. 首次运行前建议授予“麦克风”和“辅助功能”权限，否则热键监听或录音可能失败
+12. 系统级入口优先走 `InputMethodKit` 提交；无活跃 controller 时优先尝试 Accessibility 注入，再退到 Unicode 事件输入，最后才回退到剪贴板
+
+日常调试时，优先用下面这条链路：
+
+1. 改代码
+2. 运行 `scripts/dev_install_macos_input_method.sh`
+3. 回到系统设置里切换或重新启用 `VoiceInput`
+
+如果系统输入法列表里还是找不到 `VoiceInput`，按下面顺序排查：
+
+1. 先确认 bundle 已经真的安装到了用户目录：`ls ~/Library/Input\ Methods/VoiceInput.app`
+2. 如果这里不存在，说明安装脚本还没有成功完成，重新跑 `scripts/install_macos_input_method.sh`
+3. 如果 bundle 已存在，先注销当前 macOS 会话再回来，或者重启一次输入法相关服务
+4. 如果你是从下载包、zip 或外部目录复制过来的，再检查是否带了隔离属性：`xattr -dr com.apple.quarantine ~/Library/Input\ Methods/VoiceInput.app`
+5. 仍然看不到时，优先看终端里的安装日志，确认没有编译失败或复制失败
+6. 进一步排查时，运行 `scripts/dump_macos_input_source_state.sh` 看它有没有出现在 HIToolbox、TIS 和 extension 里
 
 ## 还缺什么
 
