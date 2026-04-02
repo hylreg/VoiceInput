@@ -28,3 +28,21 @@ fn local_transcriber_uses_local_model_config() {
     assert_eq!(recorded[0].device, "auto");
     assert_eq!(recorded[0].language, "中文");
 }
+
+#[test]
+fn local_transcriber_rejects_empty_result() {
+    let runner = MockFunAsrRunner {
+        transcript: "   ".to_string(),
+        ..Default::default()
+    };
+    let transcriber = LocalFunAsrTranscriber::new(FunAsrConfig::default(), Box::new(runner));
+
+    let err = transcriber
+        .transcribe(b"fake wav bytes")
+        .expect_err("empty transcription should fail");
+
+    assert!(
+        err.to_string().contains("没有返回识别文本"),
+        "unexpected error: {err}"
+    );
+}

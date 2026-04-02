@@ -8,10 +8,12 @@ This keeps the runtime offline-friendly after the first download.
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -19,6 +21,13 @@ DEFAULT_MODEL_ID = "FunAudioLLM/Fun-ASR-Nano-2512"
 DEFAULT_MODEL_URL = "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
 DEFAULT_LOCAL_DIR = Path("./models/FunAudioLLM/Fun-ASR-Nano-2512")
 MODEL_CODE_NAME = "model.py"
+REMOTE_CODE_BASE = "https://raw.githubusercontent.com/FunAudioLLM/Fun-ASR/main"
+REMOTE_CODE_FILES = [
+    "model.py",
+    "ctc.py",
+    "tools/__init__.py",
+    "tools/utils.py",
+]
 
 
 def has_required_model_files(local_dir: Path) -> bool:
@@ -26,24 +35,78 @@ def has_required_model_files(local_dir: Path) -> bool:
         local_dir / "config.yaml",
         local_dir / "model.pt",
         local_dir / MODEL_CODE_NAME,
+        local_dir / "ctc.py",
+        local_dir / "tools" / "__init__.py",
+        local_dir / "tools" / "utils.py",
     ]
     return all(path.exists() for path in required_files)
 
 
-def ensure_model_code_file(model_id: str, local_dir: Path, revision: str) -> str:
-    from modelscope import snapshot_download
-
-    model_code_path = local_dir / MODEL_CODE_NAME
-    if model_code_path.exists():
-        return str(model_code_path)
-
-    print("正在补齐模型代码文件 model.py")
-    return snapshot_download(
-        model_id,
-        revision=revision,
-        local_dir=str(local_dir),
-        allow_file_pattern=[MODEL_CODE_NAME],
-    )
+def download_remote_code_files(local_dir: Path) -> None:
+    for rel_path in REMOTE_CODE_FILES:
+        target_path = local_dir / rel_path
+        if target_path.exists():
+            continue
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_fd, tmp_name = tempfile.mkstemp(dir=str(target_path.parent))
+        os.close(tmp_fd)
+        tmp_path = Path(tmp_name)
+        url = f"{REMOTE_CODE_BASE}/{rel_path}"
+        print(f"正在下载远程代码文件：{rel_path}")
+        last_error = None
+        downloaders = [
+            [
+                "curl",
+                "-fsSL",
+                "--http1.1",
+                "--retry",
+                "5",
+                "--retry-delay",
+                "1",
+                "--connect-timeout",
+                "20",
+                "--max-time",
+                "60",
+                "-o",
+                str(tmp_path),
+                url,
+            ],
+            [
+                "wget",
+                "--quiet",
+                "--tries=5",
+                "--waitretry=1",
+                "--timeout=20",
+                "-O",
+                str(tmp_path),
+                url,
+            ],
+        ]
+        try:
+            for command in downloaders:
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                    result = subprocess.run(command, stderr=subprocess.PIPE, check=False)
+                    if result.returncode == 0 and tmp_path.exists():
+                        tmp_path.replace(target_path)
+                        last_error = None
+                        break
+                    last_error = subprocess.CalledProcessError(
+                        result.returncode, command, stderr=result.stderr
+                    )
+                    print(f"下载失败，正在切换下载器：{last_error}")
+                except OSError as exc:
+                    last_error = exc
+                    print(f"下载失败，正在切换下载器：{exc}")
+            if last_error is not None:
+                raise RuntimeError(f"下载远程代码文件失败：{rel_path}: {last_error}")
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -169,13 +232,19 @@ def main() -> int:
             print("CUDA 版 PyTorch 安装失败", file=sys.stderr)
             return result.returncode
 
-    if args.skip_existing and has_required_model_files(local_dir):
-        print(f"模型已存在：{local_dir}")
-        return 0
+    if args.skip_existing and local_dir.exists():
+        if has_required_model_files(local_dir):
+            print(f"模型已存在：{local_dir}")
+            return 0
+        print("发现模型目录缺少远程代码文件，正在补齐...")
+        download_remote_code_files(local_dir)
+        if has_required_model_files(local_dir):
+            print(f"模型已存在：{local_dir}")
+            return 0
 
     try:
         from modelscope import snapshot_download
-    except ImportError as exc:
+    except ImportError:
         print(
             "需要先安装 modelscope。可执行：uv pip install -r scripts/requirements-asr-base.txt",
             file=sys.stderr,
@@ -193,7 +262,7 @@ def main() -> int:
         local_dir=str(local_dir),
     )
 
-    ensure_model_code_file(args.model_id, local_dir, args.revision)
+    download_remote_code_files(local_dir)
 
     print(f"下载完成：{downloaded}")
     return 0

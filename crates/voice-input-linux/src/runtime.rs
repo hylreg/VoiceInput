@@ -47,10 +47,10 @@ mod linux_runtime {
         let hotkey = LinuxHotkeySpec::parse(&config.app.activation_hotkey)?;
         let watcher = LinuxHotkeyWatcher::spawn(hotkey, active_for_watcher, recorder_for_watcher)?;
         let host = LinuxInputMethodHost::new(config.host.clone());
-        let transcriber = LocalFunAsrTranscriber::new(
-            config.asr,
-            Box::new(PythonFunAsrRunner::default()),
-        );
+        println!("正在预加载 FunASR 模型...");
+        let asr_runner = PythonFunAsrRunner::connect(config.asr.clone())?;
+        println!("FunASR 模型预加载完成");
+        let transcriber = LocalFunAsrTranscriber::new(config.asr, Box::new(asr_runner));
         let controller = AppController::new(
             config.app,
             Box::new(MockHotkeyManager),

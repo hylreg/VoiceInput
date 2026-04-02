@@ -20,6 +20,14 @@ fn main() {
 
     let bridge = MockMacImeBridge::default();
     let bridge_for_output = bridge.clone();
+    let asr_runner = match voice_input_asr::PythonFunAsrRunner::connect(FunAsrConfig::default()) {
+        Ok(runner) => runner,
+        Err(err) => {
+            eprintln!("预加载 FunASR 模型失败：{err}");
+            std::process::exit(1);
+        }
+    };
+
     let pipeline = MacLocalVoiceInput::new(
         MacLocalVoiceInputConfig {
             app: AppConfig::default(),
@@ -28,7 +36,7 @@ fn main() {
         },
         Box::new(MockHotkeyManager),
         Box::new(FileAudioRecorder::new(audio_path)),
-        Box::new(PythonFunAsrRunner::default()),
+        Box::new(asr_runner),
         Box::new(bridge),
     );
 

@@ -227,8 +227,10 @@ impl LinuxHotkeyWatcher {
 
                 if pressed && !latched {
                     if active.load(Ordering::SeqCst) {
+                        eprintln!("检测到停止热键，正在结束录音...");
                         recorder.stop();
                     } else {
+                        eprintln!("检测到开始热键，正在启动录音...");
                         let _ = sender.send(());
                     }
                     latched = true;

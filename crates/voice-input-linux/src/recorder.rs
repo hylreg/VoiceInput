@@ -202,6 +202,13 @@ impl AudioRecorder for LinuxMicAudioRecorder {
             return Err(VoiceInputError::Audio("没有录到有效音频".to_string()));
         }
 
+        let duration_secs = captured.len() as f32 / sample_rate as f32;
+        println!(
+            "录音完成：{} 个采样，约 {:.2} 秒",
+            captured.len(),
+            duration_secs
+        );
+
         write_pcm_wav(&captured, sample_rate)
     }
 }

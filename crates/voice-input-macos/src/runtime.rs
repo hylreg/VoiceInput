@@ -234,9 +234,12 @@ mod mac_runtime {
                 }
             };
             let host = MacInputMethodHost::new_with_bridge(config.host.clone(), bridge);
+            println!("正在预加载 FunASR 模型...");
+            let asr_runner = PythonFunAsrRunner::connect(config.asr.clone())?;
+            println!("FunASR 模型预加载完成");
             let transcriber = voice_input_asr::LocalFunAsrTranscriber::new(
                 config.asr,
-                Box::new(PythonFunAsrRunner::default()),
+                Box::new(asr_runner),
             );
             let controller = AppController::new(
                 config.app,
