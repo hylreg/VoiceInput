@@ -1,4 +1,7 @@
 use std::sync::{Arc, Mutex};
+use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 use crate::backend::LinuxBackendKind;
 use voice_input_core::{Result, VoiceInputError};
@@ -181,6 +184,12 @@ impl IbusEngineBridge for IbusClientBridge {
         context
             .reset()
             .map_err(|e| VoiceInputError::Injection(format!("提交后 IBus reset 失败：{e}")))?;
+
+        if let Err(err) = paste_text_into_active_window(text) {
+            return Err(VoiceInputError::Injection(format!(
+                "Linux 文本提交失败：{err}"
+            )));
+        }
 
         Ok(())
     }
@@ -366,4 +375,28 @@ impl crate::backend::LinuxBackend for IbusBackend {
     fn stop(&self) -> Result<()> {
         self.bridge.end_composition()
     }
+}
+
+#[cfg(target_os = "linux")]
+fn paste_text_into_active_window(text: &str) -> Result<()> {
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| VoiceInputError::Injection(format!("打开系统剪贴板失败：{e}")))?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| VoiceInputError::Injection(format!("写入系统剪贴板失败：{e}")))?;
+
+    thread::sleep(Duration::from_millis(40));
+
+    let status = Command::new("xdotool")
+        .args(["key", "--clearmodifiers", "ctrl+v"])
+        .status()
+        .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+
+    if !status.success() {
+        return Err(VoiceInputError::Injection(format!(
+            "xdotool 粘贴失败，退出码：{status}"
+        )));
+    }
+
+    Ok(())
 }

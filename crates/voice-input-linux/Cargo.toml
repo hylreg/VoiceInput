@@ -13,6 +13,7 @@ voice-input-core = { path = "../voice-input-core" }
 ibus = { version = "0.2", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+arboard = "3.6"
 cpal = "0.16"
 device_query = "4.0"
 hound = "3.5"
