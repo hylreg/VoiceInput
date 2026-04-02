@@ -1,7 +1,10 @@
 use voice_input_core::InputMethodHost;
+use voice_input_core::{AppConfig, MockAudioRecorder, MockHotkeyManager};
+use voice_input_asr::MockFunAsrRunner;
 use voice_input_linux::{
     IbusEngineEvent, LinuxBackendKind, LinuxCompositionSession, LinuxHostConfig,
-    LinuxInputMethodHost, MockIbusBridge, MockLinuxBackend,
+    LinuxInputMethodHost, LinuxLocalVoiceInput, LinuxLocalVoiceInputConfig, MockIbusBridge,
+    MockLinuxBackend,
 };
 
 #[test]
@@ -81,6 +84,42 @@ fn ibus_backend_records_ibus_style_events() {
             IbusEngineEvent::UpdatePreedit("hello".to_string()),
             IbusEngineEvent::CommitText("hello world".to_string()),
             IbusEngineEvent::EndComposition,
+        ]
+    );
+}
+
+#[test]
+fn local_voice_input_wires_linux_host_and_asr_pipeline() {
+    let backend = MockLinuxBackend::new(LinuxBackendKind::IBus);
+    let backend_for_assertions = backend.clone();
+    let runner = MockFunAsrRunner {
+        transcript: "来自 Linux".to_string(),
+        ..Default::default()
+    };
+    let pipeline = LinuxLocalVoiceInput::new(
+        LinuxLocalVoiceInputConfig {
+            app: AppConfig::default(),
+            host: LinuxHostConfig {
+                backend: LinuxBackendKind::IBus,
+                service_name: "voice-input".to_string(),
+            },
+            asr: voice_input_asr::FunAsrConfig::default(),
+        },
+        Box::new(MockHotkeyManager),
+        Box::new(MockAudioRecorder),
+        Box::new(runner),
+        Box::new(backend),
+    );
+
+    let text = pipeline.run_once().expect("pipeline should succeed");
+    assert_eq!(text, "来自 Linux");
+    assert_eq!(
+        backend_for_assertions.events(),
+        vec![
+            "开始输入",
+            "更新预编辑：来自 Linux",
+            "提交文本：来自 Linux",
+            "结束输入",
         ]
     );
 }

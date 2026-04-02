@@ -18,6 +18,32 @@ from pathlib import Path
 DEFAULT_MODEL_ID = "FunAudioLLM/Fun-ASR-Nano-2512"
 DEFAULT_MODEL_URL = "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
 DEFAULT_LOCAL_DIR = Path("./models/FunAudioLLM/Fun-ASR-Nano-2512")
+MODEL_CODE_NAME = "model.py"
+
+
+def has_required_model_files(local_dir: Path) -> bool:
+    required_files = [
+        local_dir / "config.yaml",
+        local_dir / "model.pt",
+        local_dir / MODEL_CODE_NAME,
+    ]
+    return all(path.exists() for path in required_files)
+
+
+def ensure_model_code_file(model_id: str, local_dir: Path, revision: str) -> str:
+    from modelscope import snapshot_download
+
+    model_code_path = local_dir / MODEL_CODE_NAME
+    if model_code_path.exists():
+        return str(model_code_path)
+
+    print("正在补齐模型代码文件 model.py")
+    return snapshot_download(
+        model_id,
+        revision=revision,
+        local_dir=str(local_dir),
+        allow_file_pattern=[MODEL_CODE_NAME],
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,7 +127,7 @@ def main() -> int:
 
     if target_device == "cuda":
         print(
-            "本脚本不会自动安装 CUDA。请先安装 CUDA 版 PyTorch 以及匹配的 NVIDIA 驱动 / CUDA runtime，再进行推理。"
+            "默认不会自动安装 CUDA。若传入 --install-cuda 且检测到 NVIDIA GPU，脚本会尝试安装 CUDA 版 PyTorch wheels；否则请先安装 CUDA 版 PyTorch 以及匹配的 NVIDIA 驱动 / CUDA runtime，再进行推理。"
         )
     elif target_device == "mps":
         print(
@@ -143,7 +169,7 @@ def main() -> int:
             print("CUDA 版 PyTorch 安装失败", file=sys.stderr)
             return result.returncode
 
-    if args.skip_existing and local_dir.exists() and any(local_dir.iterdir()):
+    if args.skip_existing and has_required_model_files(local_dir):
         print(f"模型已存在：{local_dir}")
         return 0
 
@@ -166,6 +192,8 @@ def main() -> int:
         revision=args.revision,
         local_dir=str(local_dir),
     )
+
+    ensure_model_code_file(args.model_id, local_dir, args.revision)
 
     print(f"下载完成：{downloaded}")
     return 0

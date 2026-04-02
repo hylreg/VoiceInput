@@ -24,6 +24,18 @@ language = sys.argv[5]
 itn = sys.argv[6] == "true"
 hotwords = json.loads(sys.argv[7])
 
+if remote_code:
+    candidate = remote_code
+    if not os.path.isabs(candidate):
+        local_candidate = os.path.join(model_dir, candidate)
+        if os.path.exists(local_candidate):
+            candidate = local_candidate
+    if os.path.isdir(candidate):
+        candidate = os.path.join(candidate, "model.py")
+    if os.path.exists(os.path.join(model_dir, "model.py")):
+        candidate = os.path.join(model_dir, "model.py")
+    remote_code = candidate
+
 if device == "auto":
     if torch.cuda.is_available():
         device = "cuda"

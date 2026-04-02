@@ -133,8 +133,8 @@ Python 环境：
 - 部署脚本会在 Linux / Windows 上自动检测 NVIDIA GPU
 - 如果检测到 NVIDIA，就把 inference hint 设为 `cuda`
 - 在 macOS 上，会检测 PyTorch 的 MPS 支持，存在时选择 `mps`
-- 它不会自动安装 CUDA。你仍然需要在运行推理的机器上准备好 CUDA 版 PyTorch 和匹配的 NVIDIA 驱动 / runtime
-- 如果你想让脚本在 NVIDIA 机器上安装 CUDA 版 PyTorch wheels，可以使用 `--install-cuda`
+- 默认不会自动安装 CUDA；如果你传了 `--install-cuda`，并且机器上检测到 NVIDIA GPU，脚本会尝试安装 CUDA 版 PyTorch wheels
+- 如果不传 `--install-cuda`，你仍然需要在运行推理的机器上准备好 CUDA 版 PyTorch 和匹配的 NVIDIA 驱动 / runtime
 
 ### Smoke 路径
 
@@ -148,3 +148,55 @@ Python 环境：
 2. 再做一个平台宿主跑通端到端
 3. 然后把宿主边界推广到其他平台
 4. 最后补转写后端的完整集成
+
+## Linux 运行建议
+
+Ubuntu 20.04 上优先用 IBus 跑通最小闭环。
+
+建议先准备这些系统依赖：
+
+- `build-essential`
+- `pkg-config`
+- `libdbus-1-dev`
+- `libibus-1.0-dev`
+- `python3`
+- `python3-venv`
+- `python3-pip`
+- `libx11-dev`
+
+如果还要让 Rust 侧录音后端可用，再补：
+
+- `libasound2-dev`
+- `portaudio19-dev`
+
+然后可以先跑：
+
+```bash
+cargo run -p voice-input-linux --features ibus -- --audio-file /path/to/audio.wav
+```
+
+或者：
+
+```bash
+scripts/run_linux_smoke.sh --audio-file /path/to/audio.wav
+```
+
+常驻版可以这样启动：
+
+```bash
+cargo run -p voice-input-linux --bin voice-input-linux-app -- --backend ibus
+```
+
+启动后会常驻在托盘里，菜单提供状态、停止当前录音和退出；平时还是用全局热键开始录音。
+
+如果你是直接用 `cargo run`，记得加上 `--features ibus`，否则 IBus 会退回成未绑定的占位实现。
+
+如果想要真正的一键启动，可以直接用：
+
+```bash
+scripts/install_linux_voice_input.sh
+```
+
+默认会先跑 Linux bootstrap，自动安装缺失的 Ubuntu 20.04 常用依赖，然后启动常驻托盘版；传入 `--audio-file` 时会改成 smoke 模式。
+
+当前 Linux 目标是先把转写结果通过 IBus 宿主送进当前焦点窗口。Fcitx5 还保留为后续单独接 native bindings 的路线。

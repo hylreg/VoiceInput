@@ -8,5 +8,12 @@ default = []
 ibus = ["dep:ibus"]
 
 [dependencies]
+voice-input-asr = { path = "../voice-input-asr" }
 voice-input-core = { path = "../voice-input-core" }
 ibus = { version = "0.2", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = "0.16"
+device_query = "4.0"
+hound = "3.5"
+ksni = { version = "0.3", features = ["blocking"] }

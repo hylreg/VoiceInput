@@ -8,7 +8,7 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-UV_VENV_CLEAR=1 uv venv .venv
+UV_VENV_CLEAR=1 uv venv .venv --python "$(command -v python3.12)"
 uv pip install -r scripts/requirements-asr-base.txt
 uv pip install -r scripts/requirements-asr-runtime.txt
 

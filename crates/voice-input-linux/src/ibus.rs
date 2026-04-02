@@ -3,11 +3,6 @@ use std::sync::{Arc, Mutex};
 use crate::backend::LinuxBackendKind;
 use voice_input_core::{Result, VoiceInputError};
 
-#[cfg(feature = "ibus")]
-pub mod bindings {
-    pub use ibus::*;
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IbusEngineEvent {
     StartComposition,
@@ -133,16 +128,16 @@ impl IbusClientBridge {
         Ok(())
     }
 
-    pub fn recorded_events(&self) -> Vec<IbusEngineEvent> {
-        self.events.lock().expect("IBus 桥接事件锁").clone()
-    }
 }
 
 #[cfg(feature = "ibus")]
 impl IbusEngineBridge for IbusClientBridge {
     fn start_composition(&self) -> Result<()> {
         self.ensure_context()?;
-        let context = self.context.borrow().as_ref().expect("IBus 上下文已初始化");
+        let context_binding = self.context.borrow();
+        let context = context_binding
+            .as_ref()
+            .expect("IBus 上下文已初始化");
         context
             .focus_in()
             .map_err(|e| VoiceInputError::Injection(format!("IBus focus_in 失败：{e}")))?;
@@ -156,7 +151,10 @@ impl IbusEngineBridge for IbusClientBridge {
 
     fn update_preedit(&self, text: &str) -> Result<()> {
         self.ensure_context()?;
-        let context = self.context.borrow().as_ref().expect("IBus 上下文已初始化");
+        let context_binding = self.context.borrow();
+        let context = context_binding
+            .as_ref()
+            .expect("IBus 上下文已初始化");
         context
             .set_surrounding_text(text.to_string(), text.len() as u32, text.len() as u32)
             .map_err(|e| {
@@ -176,7 +174,10 @@ impl IbusEngineBridge for IbusClientBridge {
             lock.push(IbusEngineEvent::CommitText(text.to_string()));
         }
 
-        let context = self.context.borrow().as_ref().expect("IBus 上下文已初始化");
+        let context_binding = self.context.borrow();
+        let context = context_binding
+            .as_ref()
+            .expect("IBus 上下文已初始化");
         context
             .reset()
             .map_err(|e| VoiceInputError::Injection(format!("提交后 IBus reset 失败：{e}")))?;
@@ -189,7 +190,10 @@ impl IbusEngineBridge for IbusClientBridge {
         if let Ok(mut lock) = self.events.lock() {
             lock.push(IbusEngineEvent::CancelComposition);
         }
-        let context = self.context.borrow().as_ref().expect("IBus 上下文已初始化");
+        let context_binding = self.context.borrow();
+        let context = context_binding
+            .as_ref()
+            .expect("IBus 上下文已初始化");
         context
             .reset()
             .map_err(|e| VoiceInputError::Injection(format!("取消后 IBus reset 失败：{e}")))?;
@@ -199,7 +203,10 @@ impl IbusEngineBridge for IbusClientBridge {
 
     fn end_composition(&self) -> Result<()> {
         self.ensure_context()?;
-        let context = self.context.borrow().as_ref().expect("IBus 上下文已初始化");
+        let context_binding = self.context.borrow();
+        let context = context_binding
+            .as_ref()
+            .expect("IBus 上下文已初始化");
         context
             .focus_out()
             .map_err(|e| VoiceInputError::Injection(format!("IBus focus_out 失败：{e}")))?;

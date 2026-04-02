@@ -48,7 +48,7 @@
 - 模型部署脚本：[`scripts/deploy_funasr_model.py`](./scripts/deploy_funasr_model.py)
 - Python 依赖使用本地 `.venv` 和 `uv` 管理
 - macOS smoke 路径默认使用 `uv run`
-- 在 macOS 上自动检测 MPS，在 Linux/Windows 上自动检测 NVIDIA CUDA，但不会自动安装 CUDA
+- 在 macOS 上自动检测 MPS，在 Linux/Windows 上自动检测 NVIDIA CUDA；默认不自动安装 CUDA，但可通过 `--install-cuda` 触发安装 CUDA 版 PyTorch wheels
 - 部署脚本提供 `--install-cuda` 选项，用于 NVIDIA 机器安装 CUDA 版 PyTorch wheels
 
 ## Python 环境
@@ -67,6 +67,9 @@
 
 1. `scripts/run_macos_smoke.sh --audio-file /path/to/audio.wav`
 2. 或者 `uv run -- cargo run -p voice-input-macos -- --audio-file /path/to/audio.wav`
+3. Linux live app 可以用 `cargo run -p voice-input-linux --features ibus --bin voice-input-linux-app -- --backend ibus`
+4. Linux smoke 仍然可以用 `scripts/run_linux_smoke.sh --audio-file /path/to/audio.wav`
+5. Linux 一键版可以用 `scripts/install_linux_voice_input.sh`
 
 ## 模型部署
 
@@ -90,5 +93,19 @@
 
 1. 用真正的 `InputMethodKit` 实现替换 macOS mock host
 2. 用真正的 TSF 实现替换 Windows mock host
-3. 用真实 native bindings 替换 IBus bridge placeholder
+3. 用真实 native bindings 补齐 Fcitx5 路径
 4. 增加真正的 macOS 热键和录音适配器
+
+## Linux 快速开始
+
+1. Ubuntu 20.04 上先安装 `build-essential`、`pkg-config`、`libdbus-1-dev`、`libibus-1.0-dev`、`python3`、`python3-venv`、`python3-pip`
+2. 如果要让 Rust 侧录音后端也可用，再补 `libasound2-dev` 和 `portaudio19-dev`
+3. 如果要用 Linux 全局热键监听，再补 `libx11-dev`
+4. 先准备好 `.venv` 和本地 ASR 模型
+5. 运行 `scripts/run_linux_smoke.sh --audio-file /path/to/audio.wav`
+6. 或者直接运行 `cargo run -p voice-input-linux --features ibus -- --audio-file /path/to/audio.wav`
+7. 或者启动常驻版：`cargo run -p voice-input-linux --features ibus --bin voice-input-linux-app -- --backend ibus`
+8. 常驻版会在托盘显示状态项，热键开始/停止录音，托盘菜单里也有停止和退出
+9. 或者直接用一键脚本：`scripts/install_linux_voice_input.sh`
+10. 这个一键脚本会自动安装 Ubuntu 20.04 常用的 Linux 编译依赖，然后启动常驻版
+11. 当前 Linux 这条线优先支持 IBus，Fcitx5 还保留为后续 native bindings 的路线

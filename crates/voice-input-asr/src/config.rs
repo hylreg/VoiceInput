@@ -17,7 +17,7 @@ impl Default for FunAsrConfig {
             source_url: "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
                 .to_string(),
             model_dir: PathBuf::from("./models/FunAudioLLM/Fun-ASR-Nano-2512"),
-            remote_code: PathBuf::from("model.py"),
+            remote_code: PathBuf::from("./models/FunAudioLLM/Fun-ASR-Nano-2512/model.py"),
             device: "auto".to_string(),
             language: "中文".to_string(),
             itn: true,
