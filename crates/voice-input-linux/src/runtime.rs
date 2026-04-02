@@ -20,21 +20,40 @@ mod linux_runtime {
         pub host: LinuxHostConfig,
         pub asr: FunAsrConfig,
         pub max_recording_duration: Duration,
+        pub double_ctrl_window: Duration,
         pub show_status_item: bool,
     }
 
     impl Default for LinuxLiveAppConfig {
         fn default() -> Self {
+            let mut app = AppConfig::default();
+            app.activation_hotkey = "DoubleCtrlStrict".to_string();
+
             Self {
-                app: AppConfig::default(),
+                app,
                 host: LinuxHostConfig {
                     backend: LinuxBackendKind::IBus,
                     service_name: "voice-input".to_string(),
                 },
                 asr: FunAsrConfig::default(),
                 max_recording_duration: Duration::from_secs(12),
+                double_ctrl_window: Duration::from_millis(200),
                 show_status_item: true,
             }
+        }
+    }
+
+    fn describe_activation_hotkey(spec: &str, double_ctrl_window: Duration) -> String {
+        if spec.eq_ignore_ascii_case("doublectrl")
+            || spec.eq_ignore_ascii_case("double-ctrl")
+            || spec.eq_ignore_ascii_case("double_ctrl")
+            || spec.eq_ignore_ascii_case("doublectrlstrict")
+            || spec.eq_ignore_ascii_case("double-ctrl-strict")
+            || spec.eq_ignore_ascii_case("double_ctrl_strict")
+        {
+            format!("双击 Ctrl（严格，{}ms）", double_ctrl_window.as_millis())
+        } else {
+            spec.to_string()
         }
     }
 
@@ -45,7 +64,12 @@ mod linux_runtime {
         let active_for_watcher = Arc::clone(&active);
         let quit_requested = Arc::new(AtomicBool::new(false));
         let hotkey = LinuxHotkeySpec::parse(&config.app.activation_hotkey)?;
-        let watcher = LinuxHotkeyWatcher::spawn(hotkey, active_for_watcher, recorder_for_watcher)?;
+        let watcher = LinuxHotkeyWatcher::spawn(
+            hotkey,
+            active_for_watcher,
+            recorder_for_watcher,
+            config.double_ctrl_window,
+        )?;
         let host = LinuxInputMethodHost::new(config.host.clone());
         println!("正在预加载 FunASR 模型...");
         let asr_runner = PythonFunAsrRunner::connect(config.asr.clone())?;
@@ -72,7 +96,11 @@ mod linux_runtime {
         };
 
         println!("VoiceInput Linux 常驻应用已启动");
-        println!("热键：{}", controller.config.activation_hotkey);
+        println!(
+            "热键：{}",
+            describe_activation_hotkey(&controller.config.activation_hotkey, config.double_ctrl_window)
+        );
+        println!("双击间隔：{}ms", config.double_ctrl_window.as_millis());
         println!("说明：按一次开始录音，再按一次停止并转写");
         if config.show_status_item {
             println!("状态提示：已启用");
@@ -146,6 +174,7 @@ mod not_linux {
         pub host: LinuxHostConfig,
         pub asr: FunAsrConfig,
         pub max_recording_duration: Duration,
+        pub double_ctrl_window: Duration,
         pub show_status_item: bool,
     }
 
@@ -156,6 +185,7 @@ mod not_linux {
                 host: LinuxHostConfig::default(),
                 asr: FunAsrConfig::default(),
                 max_recording_duration: Duration::from_secs(12),
+                double_ctrl_window: Duration::from_millis(200),
                 show_status_item: false,
             }
         }

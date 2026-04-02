@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use voice_input_core::{Result, VoiceInputError};
 
@@ -11,6 +12,7 @@ use device_query::{DeviceQuery, DeviceState, Keycode};
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxHotkeySpec {
+    double_ctrl: bool,
     key: Keycode,
     control: bool,
     shift: bool,
@@ -22,6 +24,7 @@ pub struct LinuxHotkeySpec {
 impl LinuxHotkeySpec {
     pub fn parse(spec: &str) -> Result<Self> {
         let mut parsed = LinuxHotkeySpec {
+            double_ctrl: false,
             key: Keycode::Space,
             control: false,
             shift: false,
@@ -34,6 +37,17 @@ impl LinuxHotkeySpec {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
         {
+            if token.eq_ignore_ascii_case("doublectrl")
+                || token.eq_ignore_ascii_case("double-ctrl")
+                || token.eq_ignore_ascii_case("double_ctrl")
+                || token.eq_ignore_ascii_case("doublectrlstrict")
+                || token.eq_ignore_ascii_case("double-ctrl-strict")
+                || token.eq_ignore_ascii_case("double_ctrl_strict")
+            {
+                parsed.double_ctrl = true;
+                continue;
+            }
+
             match token.to_ascii_lowercase().as_str() {
                 "ctrl" | "control" => parsed.control = true,
                 "shift" => parsed.shift = true,
@@ -71,6 +85,10 @@ impl LinuxHotkeySpec {
     }
 
     pub fn matches(&self, keys: &[Keycode]) -> bool {
+        if self.double_ctrl {
+            return is_ctrl_only(keys);
+        }
+
         if !keys.contains(&self.key) {
             return false;
         }
@@ -156,6 +174,14 @@ fn has_any(keys: &[Keycode], candidates: &[Keycode]) -> bool {
     candidates.iter().any(|candidate| keys.contains(candidate))
 }
 
+#[cfg(target_os = "linux")]
+fn is_ctrl_only(keys: &[Keycode]) -> bool {
+    !keys.is_empty()
+        && keys
+            .iter()
+            .all(|key| matches!(key, Keycode::LControl | Keycode::RControl))
+}
+
 #[cfg(not(target_os = "linux"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxHotkeySpec;
@@ -212,6 +238,7 @@ impl LinuxHotkeyWatcher {
         spec: LinuxHotkeySpec,
         active: Arc<AtomicBool>,
         recorder: crate::recorder::LinuxMicAudioRecorder,
+        double_ctrl_window: Duration,
     ) -> Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
@@ -220,22 +247,51 @@ impl LinuxHotkeyWatcher {
         let handle = thread::spawn(move || {
             let device = DeviceState::new();
             let mut latched = false;
+            let mut last_ctrl_press: Option<Instant> = None;
 
             while !stop_for_thread.load(Ordering::SeqCst) {
                 let keys = device.get_keys();
-                let pressed = spec.matches(&keys);
+                if spec.double_ctrl {
+                    let ctrl_pressed = spec.matches(&keys);
 
-                if pressed && !latched {
-                    if active.load(Ordering::SeqCst) {
-                        eprintln!("检测到停止热键，正在结束录音...");
-                        recorder.stop();
-                    } else {
-                        eprintln!("检测到开始热键，正在启动录音...");
-                        let _ = sender.send(());
+                    if ctrl_pressed && !latched {
+                        let now = Instant::now();
+                        let triggered = last_ctrl_press
+                            .map(|last| now.duration_since(last) <= double_ctrl_window)
+                            .unwrap_or(false);
+
+                        if triggered {
+                            if active.load(Ordering::SeqCst) {
+                                eprintln!("检测到双击 Ctrl 停止热键，正在结束录音...");
+                                recorder.stop();
+                            } else {
+                                eprintln!("检测到双击 Ctrl 开始热键，正在启动录音...");
+                                let _ = sender.send(());
+                            }
+                            last_ctrl_press = None;
+                        } else {
+                            last_ctrl_press = Some(now);
+                        }
+
+                        latched = true;
+                    } else if !ctrl_pressed {
+                        latched = false;
                     }
-                    latched = true;
-                } else if !pressed {
-                    latched = false;
+                } else {
+                    let pressed = spec.matches(&keys);
+
+                    if pressed && !latched {
+                        if active.load(Ordering::SeqCst) {
+                            eprintln!("检测到停止热键，正在结束录音...");
+                            recorder.stop();
+                        } else {
+                            eprintln!("检测到开始热键，正在启动录音...");
+                            let _ = sender.send(());
+                        }
+                        latched = true;
+                    } else if !pressed {
+                        latched = false;
+                    }
                 }
 
                 thread::sleep(Duration::from_millis(25));
@@ -290,5 +346,23 @@ mod tests {
         let spec = LinuxHotkeySpec::parse("Ctrl+Shift+Space").expect("parse hotkey");
         assert!(spec.matches(&[Keycode::Space, Keycode::LControl, Keycode::LShift]));
         assert!(!spec.matches(&[Keycode::Space, Keycode::LControl]));
+    }
+
+    #[test]
+    fn parses_double_ctrl_hotkey() {
+        let spec = LinuxHotkeySpec::parse("DoubleCtrl").expect("parse hotkey");
+        assert!(spec.matches(&[Keycode::LControl]));
+        assert!(spec.matches(&[Keycode::RControl]));
+        assert!(spec.matches(&[Keycode::LControl, Keycode::RControl]));
+        assert!(!spec.matches(&[Keycode::Space]));
+        assert!(!spec.matches(&[Keycode::LControl, Keycode::Space]));
+    }
+
+    #[test]
+    fn parses_double_ctrl_strict_hotkey() {
+        let spec = LinuxHotkeySpec::parse("DoubleCtrlStrict").expect("parse hotkey");
+        assert!(spec.matches(&[Keycode::LControl]));
+        assert!(spec.matches(&[Keycode::RControl]));
+        assert!(!spec.matches(&[Keycode::Space]));
     }
 }
