@@ -414,11 +414,6 @@ pub fn backspace_in_active_window(count: usize) -> Result<()> {
 }
 
 #[cfg(not(feature = "ibus"))]
-pub fn insert_text_into_active_window(_text: &str) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(not(feature = "ibus"))]
 pub fn backspace_in_active_window(_count: usize) -> Result<()> {
     Ok(())
 }

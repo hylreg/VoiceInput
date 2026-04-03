@@ -3,6 +3,7 @@
 #[cfg(target_os = "linux")]
 mod linux_runtime {
     use std::env;
+    use std::process::Command;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
@@ -10,7 +11,7 @@ mod linux_runtime {
     use crate::backend::LinuxBackendKind;
     use crate::host::{LinuxHostConfig, LinuxInputMethodHost};
     use crate::hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
-    use crate::ibus::{backspace_in_active_window, insert_text_into_active_window};
+    use crate::ibus::backspace_in_active_window;
     use crate::recorder::LinuxMicAudioRecorder;
     use crate::tray::{spawn_linux_tray, LinuxTrayConfig};
     use voice_input_asr::{
@@ -69,6 +70,25 @@ mod linux_runtime {
             Some(text) if !text.trim().is_empty() => format!("录音中 {}", text.trim()),
             _ => "录音中".to_string(),
         }
+    }
+
+    const RECORDING_MARKER: &str = "[REC]";
+
+    fn type_recording_marker() -> Result<()> {
+        let status = Command::new("xdotool")
+            .args(["type", "--clearmodifiers", "--delay", "0", RECORDING_MARKER])
+            .status()
+            .map_err(|e| voice_input_core::VoiceInputError::Injection(format!(
+                "调用 xdotool 失败：{e}"
+            )))?;
+
+        if !status.success() {
+            return Err(voice_input_core::VoiceInputError::Injection(format!(
+                "xdotool 输入失败，退出码：{status}"
+            )));
+        }
+
+        Ok(())
     }
 
     pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
@@ -161,7 +181,7 @@ mod linux_runtime {
                 continue;
             }
 
-            if let Err(err) = insert_text_into_active_window("🎙") {
+            if let Err(err) = type_recording_marker() {
                 eprintln!("Linux 常驻输入失败：录音状态图标插入失败：{err}");
             } else {
                 recording_indicator_inserted = true;
@@ -180,7 +200,7 @@ mod linux_runtime {
                 Ok(audio) => audio,
                 Err(err) => {
                     if recording_indicator_inserted {
-                        let _ = backspace_in_active_window(1);
+                        let _ = backspace_in_active_window(RECORDING_MARKER.chars().count());
                     }
                     active.store(false, Ordering::SeqCst);
                     if let Some(tray) = tray.as_ref() {
@@ -206,7 +226,7 @@ mod linux_runtime {
                 Ok(text) => text.trim().to_string(),
                 Err(err) => {
                     if recording_indicator_inserted {
-                        let _ = backspace_in_active_window(1);
+                        let _ = backspace_in_active_window(RECORDING_MARKER.chars().count());
                     }
                     let _ = host.cancel_composition();
                     let _ = host.end_composition();
@@ -217,7 +237,7 @@ mod linux_runtime {
 
             if transcript.trim().is_empty() {
                 if recording_indicator_inserted {
-                    let _ = backspace_in_active_window(1);
+                    let _ = backspace_in_active_window(RECORDING_MARKER.chars().count());
                 }
                 let _ = host.cancel_composition();
                 let _ = host.end_composition();
@@ -229,7 +249,7 @@ mod linux_runtime {
 
             if let Err(err) = host.update_preedit(&recording_indicator_text(Some(&transcript))) {
                 if recording_indicator_inserted {
-                    let _ = backspace_in_active_window(1);
+                    let _ = backspace_in_active_window(RECORDING_MARKER.chars().count());
                 }
                 let _ = host.cancel_composition();
                 let _ = host.end_composition();
@@ -238,7 +258,7 @@ mod linux_runtime {
             }
 
             if recording_indicator_inserted {
-                if let Err(err) = backspace_in_active_window(1) {
+                if let Err(err) = backspace_in_active_window(RECORDING_MARKER.chars().count()) {
                     let _ = host.cancel_composition();
                     let _ = host.end_composition();
                     eprintln!("Linux 常驻输入失败：清理录音图标失败：{err}");
