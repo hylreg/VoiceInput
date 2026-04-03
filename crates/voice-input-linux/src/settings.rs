@@ -15,7 +15,7 @@ impl Default for LinuxAppSettings {
     fn default() -> Self {
         Self {
             double_ctrl_window_ms: 300,
-            silence_stop_timeout_ms: 900,
+            silence_stop_timeout_ms: 1500,
         }
     }
 }

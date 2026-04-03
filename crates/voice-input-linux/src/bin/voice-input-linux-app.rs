@@ -26,7 +26,8 @@ fn main() {
         .unwrap_or(persisted_settings.double_ctrl_window_ms);
     let effective_silence_stop_ms = args
         .silence_stop_ms
-        .unwrap_or(persisted_settings.silence_stop_timeout_ms);
+        .unwrap_or(persisted_settings.silence_stop_timeout_ms)
+        .max(1500);
 
     println!("配置文件：{}", settings_path().display());
     println!(
@@ -37,13 +38,16 @@ fn main() {
         "已加载静音停录：{}ms，生效值：{}ms",
         persisted_settings.silence_stop_timeout_ms, effective_silence_stop_ms
     );
+    if effective_silence_stop_ms != persisted_settings.silence_stop_timeout_ms {
+        println!("静音自动停录已提升到更保守的下限：1500ms");
+    }
 
     let config = LinuxLiveAppConfig {
         host: LinuxHostConfig {
             backend: args.backend,
             service_name: "voice-input".to_string(),
         },
-        max_recording_duration: Duration::from_secs(12),
+        max_recording_duration: Duration::from_secs(30),
         double_ctrl_window: Duration::from_millis(effective_window_ms),
         silence_stop_timeout: Duration::from_millis(effective_silence_stop_ms),
         ..Default::default()

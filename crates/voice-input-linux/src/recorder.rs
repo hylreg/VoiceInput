@@ -46,7 +46,7 @@ struct LinuxMicAudioRecorderInner {
 #[cfg(target_os = "linux")]
 impl Default for LinuxMicAudioRecorder {
     fn default() -> Self {
-        Self::new(Duration::from_secs(12))
+        Self::new(Duration::from_secs(30))
     }
 }
 
@@ -82,6 +82,7 @@ impl LinuxMicAudioRecorder {
         &self,
         chunk_interval: Duration,
         silence_stop_timeout: Duration,
+        silence_stop_enabled: Arc<AtomicBool>,
         mut on_snapshot: F,
     ) -> Result<Vec<u8>>
     where
@@ -195,6 +196,7 @@ impl LinuxMicAudioRecorder {
             }
 
             if !silence_stop_timeout.is_zero()
+                && silence_stop_enabled.load(Ordering::SeqCst)
                 && saw_voice_activity
                 && last_voice_at.elapsed() >= silence_stop_timeout
             {
@@ -262,6 +264,7 @@ impl AudioRecorder for LinuxMicAudioRecorder {
         self.record_once_with_chunks(
             Duration::from_millis(0),
             Duration::from_millis(0),
+            Arc::new(AtomicBool::new(true)),
             |_, _, _| {},
         )
     }
@@ -269,7 +272,7 @@ impl AudioRecorder for LinuxMicAudioRecorder {
 
 #[cfg(target_os = "linux")]
 fn has_voice_activity(samples: &[i16]) -> bool {
-    const RMS_THRESHOLD: f64 = 650.0;
+    const RMS_THRESHOLD: f64 = 450.0;
     if samples.is_empty() {
         return false;
     }

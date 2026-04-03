@@ -41,9 +41,9 @@ mod linux_runtime {
                     service_name: "voice-input".to_string(),
                 },
                 asr: FunAsrConfig::default(),
-                max_recording_duration: Duration::from_secs(12),
+                max_recording_duration: Duration::from_secs(30),
                 double_ctrl_window: Duration::from_millis(300),
-                silence_stop_timeout: Duration::from_millis(900),
+                silence_stop_timeout: Duration::from_millis(1500),
                 show_status_item: true,
             }
         }
@@ -142,6 +142,7 @@ mod linux_runtime {
             }
 
             println!("正在录音...");
+            let silence_stop_enabled = Arc::new(AtomicBool::new(false));
             if let Err(err) = host.start_composition() {
                 eprintln!("Linux 常驻输入失败：{err}");
                 active.store(false, Ordering::SeqCst);
@@ -154,6 +155,7 @@ mod linux_runtime {
             let audio = match recorder.record_once_with_chunks(
                 Duration::from_millis(100),
                 config.silence_stop_timeout,
+                Arc::clone(&silence_stop_enabled),
                 |_, _, _| {},
             ) {
                 Ok(audio) => audio,
@@ -251,9 +253,9 @@ mod not_linux {
                 app: AppConfig::default(),
                 host: LinuxHostConfig::default(),
                 asr: FunAsrConfig::default(),
-                max_recording_duration: Duration::from_secs(12),
+                max_recording_duration: Duration::from_secs(30),
                 double_ctrl_window: Duration::from_millis(300),
-                silence_stop_timeout: Duration::from_millis(900),
+                silence_stop_timeout: Duration::from_millis(1500),
                 show_status_item: false,
             }
         }
