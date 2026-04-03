@@ -10,6 +10,7 @@ mod linux_runtime {
     use crate::backend::LinuxBackendKind;
     use crate::host::{LinuxHostConfig, LinuxInputMethodHost};
     use crate::hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
+    use crate::ibus::{backspace_in_active_window, insert_text_into_active_window};
     use crate::recorder::LinuxMicAudioRecorder;
     use crate::tray::{spawn_linux_tray, LinuxTrayConfig};
     use voice_input_asr::{
@@ -60,6 +61,13 @@ mod linux_runtime {
             format!("双击 Ctrl（严格，{}ms）", double_ctrl_window.as_millis())
         } else {
             spec.to_string()
+        }
+    }
+
+    fn recording_indicator_text(preview: Option<&str>) -> String {
+        match preview {
+            Some(text) if !text.trim().is_empty() => format!("录音中 {}", text.trim()),
+            _ => "录音中".to_string(),
         }
     }
 
@@ -143,6 +151,7 @@ mod linux_runtime {
 
             println!("正在录音...");
             let silence_stop_enabled = Arc::new(AtomicBool::new(false));
+            let mut recording_indicator_inserted = false;
             if let Err(err) = host.start_composition() {
                 eprintln!("Linux 常驻输入失败：{err}");
                 active.store(false, Ordering::SeqCst);
@@ -150,6 +159,16 @@ mod linux_runtime {
                     tray.set_recording(false);
                 }
                 continue;
+            }
+
+            if let Err(err) = insert_text_into_active_window("🎙") {
+                eprintln!("Linux 常驻输入失败：录音状态图标插入失败：{err}");
+            } else {
+                recording_indicator_inserted = true;
+            }
+
+            if let Err(err) = host.update_preedit(&recording_indicator_text(None)) {
+                eprintln!("Linux 常驻输入失败：录音状态图标更新失败：{err}");
             }
 
             let audio = match recorder.record_once_with_chunks(
@@ -160,6 +179,9 @@ mod linux_runtime {
             ) {
                 Ok(audio) => audio,
                 Err(err) => {
+                    if recording_indicator_inserted {
+                        let _ = backspace_in_active_window(1);
+                    }
                     active.store(false, Ordering::SeqCst);
                     if let Some(tray) = tray.as_ref() {
                         tray.set_recording(false);
@@ -183,6 +205,9 @@ mod linux_runtime {
             let transcript = match transcriber.transcribe_allow_empty(&audio) {
                 Ok(text) => text.trim().to_string(),
                 Err(err) => {
+                    if recording_indicator_inserted {
+                        let _ = backspace_in_active_window(1);
+                    }
                     let _ = host.cancel_composition();
                     let _ = host.end_composition();
                     eprintln!("Linux 常驻输入失败：转写错误：{err}");
@@ -191,6 +216,9 @@ mod linux_runtime {
             };
 
             if transcript.trim().is_empty() {
+                if recording_indicator_inserted {
+                    let _ = backspace_in_active_window(1);
+                }
                 let _ = host.cancel_composition();
                 let _ = host.end_composition();
                 eprintln!("Linux 常驻输入失败：转写结果为空");
@@ -199,11 +227,23 @@ mod linux_runtime {
 
             println!("识别结果：{transcript}");
 
-            if let Err(err) = host.update_preedit(&transcript) {
+            if let Err(err) = host.update_preedit(&recording_indicator_text(Some(&transcript))) {
+                if recording_indicator_inserted {
+                    let _ = backspace_in_active_window(1);
+                }
                 let _ = host.cancel_composition();
                 let _ = host.end_composition();
                 eprintln!("Linux 常驻输入失败：预编辑更新失败：{err}");
                 continue;
+            }
+
+            if recording_indicator_inserted {
+                if let Err(err) = backspace_in_active_window(1) {
+                    let _ = host.cancel_composition();
+                    let _ = host.end_composition();
+                    eprintln!("Linux 常驻输入失败：清理录音图标失败：{err}");
+                    continue;
+                }
             }
 
             if let Err(err) = host.commit_text(&transcript) {

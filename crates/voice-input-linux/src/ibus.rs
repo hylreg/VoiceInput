@@ -181,7 +181,7 @@ impl IbusEngineBridge for IbusClientBridge {
             .reset()
             .map_err(|e| VoiceInputError::Injection(format!("提交后 IBus reset 失败：{e}")))?;
 
-        if let Err(err) = paste_text_into_active_window(text) {
+        if let Err(err) = insert_text_into_active_window(text) {
             return Err(VoiceInputError::Injection(format!(
                 "Linux 文本提交失败：{err}"
             )));
@@ -369,8 +369,8 @@ impl crate::backend::LinuxBackend for IbusBackend {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "ibus"))]
-fn paste_text_into_active_window(text: &str) -> Result<()> {
+#[cfg(feature = "ibus")]
+pub fn insert_text_into_active_window(text: &str) -> Result<()> {
     let mut clipboard = arboard::Clipboard::new()
         .map_err(|e| VoiceInputError::Injection(format!("打开系统剪贴板失败：{e}")))?;
     clipboard
@@ -379,16 +379,46 @@ fn paste_text_into_active_window(text: &str) -> Result<()> {
 
     thread::sleep(Duration::from_millis(40));
 
-    let status = Command::new("xdotool")
-        .args(["key", "--clearmodifiers", "ctrl+v"])
-        .status()
-        .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+    for shortcut in [["key", "--clearmodifiers", "Shift+Insert"], ["key", "--clearmodifiers", "ctrl+v"]] {
+        let status = Command::new("xdotool")
+            .args(shortcut)
+            .status()
+            .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
 
-    if !status.success() {
-        return Err(VoiceInputError::Injection(format!(
-            "xdotool 粘贴失败，退出码：{status}"
-        )));
+        if status.success() {
+            return Ok(());
+        }
     }
 
+    Err(VoiceInputError::Injection(
+        "xdotool 粘贴失败：Shift+Insert 和 ctrl+v 都未成功".to_string(),
+    ))
+}
+
+#[cfg(feature = "ibus")]
+pub fn backspace_in_active_window(count: usize) -> Result<()> {
+    for _ in 0..count {
+        let status = Command::new("xdotool")
+            .args(["key", "--clearmodifiers", "BackSpace"])
+            .status()
+            .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+
+        if !status.success() {
+            return Err(VoiceInputError::Injection(format!(
+                "xdotool 退格失败，退出码：{status}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(feature = "ibus"))]
+pub fn insert_text_into_active_window(_text: &str) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(feature = "ibus"))]
+pub fn backspace_in_active_window(_count: usize) -> Result<()> {
     Ok(())
 }
