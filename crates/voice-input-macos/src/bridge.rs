@@ -246,10 +246,7 @@ fn accessibility_commit_text(text: &str) -> Result<bool> {
         ) -> Boolean;
     }
 
-    unsafe fn copy_attribute(
-        element: AXUIElementRef,
-        attribute: CFStringRef,
-    ) -> Option<CFTypeRef> {
+    unsafe fn copy_attribute(element: AXUIElementRef, attribute: CFStringRef) -> Option<CFTypeRef> {
         let mut value: CFTypeRef = std::ptr::null();
         let status = AXUIElementCopyAttributeValue(element, attribute, &mut value);
         if status == AX_SUCCESS && !value.is_null() {
@@ -349,16 +346,19 @@ fn accessibility_commit_text(text: &str) -> Result<bool> {
             length: 0,
         });
 
-        let start_utf16 = usize::try_from(selection.location).ok().unwrap_or(current_utf16_len);
+        let start_utf16 = usize::try_from(selection.location)
+            .ok()
+            .unwrap_or(current_utf16_len);
         let length_utf16 = usize::try_from(selection.length).ok().unwrap_or(0);
         let start_byte = match utf16_to_byte_index(&current_text, start_utf16) {
             Some(index) => index,
             None => return Ok(false),
         };
-        let end_byte = match utf16_to_byte_index(&current_text, start_utf16.saturating_add(length_utf16)) {
-            Some(index) => index,
-            None => return Ok(false),
-        };
+        let end_byte =
+            match utf16_to_byte_index(&current_text, start_utf16.saturating_add(length_utf16)) {
+                Some(index) => index,
+                None => return Ok(false),
+            };
 
         let mut composed = String::with_capacity(current_text.len() + text.len());
         composed.push_str(&current_text[..start_byte]);

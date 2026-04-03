@@ -10,3 +10,7 @@ pub struct FunAsrRequest {
 pub trait FunAsrRunner {
     fn transcribe(&self, request: FunAsrRequest) -> Result<String>;
 }
+
+pub trait FunAsrStreamingRunner {
+    fn stream_chunk(&self, samples: &[i16], sample_rate: u32, is_final: bool) -> Result<String>;
+}

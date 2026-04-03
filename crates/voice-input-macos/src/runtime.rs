@@ -25,8 +25,8 @@ mod mac_runtime {
     use objc::{msg_send, sel, sel_impl};
 
     use crate::bridge::{ClipboardMacImeBridge, MacImeBridge};
-    use crate::imk::InputMethodKitMacImeBridge;
     use crate::host::{MacHostConfig, MacInputMethodHost};
+    use crate::imk::InputMethodKitMacImeBridge;
     use crate::recorder::MicAudioRecorder;
     use voice_input_asr::{FunAsrConfig, PythonFunAsrRunner};
     use voice_input_core::{AppConfig, AppController, MockHotkeyManager, Result, VoiceInputError};
@@ -229,18 +229,14 @@ mod mac_runtime {
             let recorder = MicAudioRecorder::new(config.max_recording_duration);
             let bridge: Box<dyn MacImeBridge> = match config.commit_backend {
                 MacCommitBackend::Clipboard => Box::new(ClipboardMacImeBridge::default()),
-                MacCommitBackend::InputMethodKit => {
-                    Box::new(InputMethodKitMacImeBridge::default())
-                }
+                MacCommitBackend::InputMethodKit => Box::new(InputMethodKitMacImeBridge::default()),
             };
             let host = MacInputMethodHost::new_with_bridge(config.host.clone(), bridge);
             println!("正在预加载 FunASR 模型...");
             let asr_runner = PythonFunAsrRunner::connect(config.asr.clone())?;
             println!("FunASR 模型预加载完成");
-            let transcriber = voice_input_asr::LocalFunAsrTranscriber::new(
-                config.asr,
-                Box::new(asr_runner),
-            );
+            let transcriber =
+                voice_input_asr::LocalFunAsrTranscriber::new(config.asr, Box::new(asr_runner));
             let controller = AppController::new(
                 config.app,
                 Box::new(MockHotkeyManager),

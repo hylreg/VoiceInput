@@ -99,7 +99,17 @@ impl LinuxHotkeySpec {
         if self.shift && !has_any(keys, &[Keycode::LShift, Keycode::RShift]) {
             return false;
         }
-        if self.alt && !has_any(keys, &[Keycode::LAlt, Keycode::RAlt, Keycode::LOption, Keycode::ROption]) {
+        if self.alt
+            && !has_any(
+                keys,
+                &[
+                    Keycode::LAlt,
+                    Keycode::RAlt,
+                    Keycode::LOption,
+                    Keycode::ROption,
+                ],
+            )
+        {
             return false;
         }
         if self.meta
@@ -248,6 +258,8 @@ impl LinuxHotkeyWatcher {
             let device = DeviceState::new();
             let mut latched = false;
             let mut last_ctrl_press: Option<Instant> = None;
+            let mut last_trigger_at: Option<Instant> = None;
+            const TRIGGER_COOLDOWN: Duration = Duration::from_millis(800);
 
             while !stop_for_thread.load(Ordering::SeqCst) {
                 let keys = device.get_keys();
@@ -256,17 +268,23 @@ impl LinuxHotkeyWatcher {
 
                     if ctrl_pressed && !latched {
                         let now = Instant::now();
+                        let recently_triggered = last_trigger_at
+                            .map(|last| now.duration_since(last) <= TRIGGER_COOLDOWN)
+                            .unwrap_or(false);
                         let triggered = last_ctrl_press
                             .map(|last| now.duration_since(last) <= double_ctrl_window)
                             .unwrap_or(false);
 
                         if triggered {
-                            if active.load(Ordering::SeqCst) {
-                                eprintln!("检测到双击 Ctrl 停止热键，正在结束录音...");
-                                recorder.stop();
-                            } else {
-                                eprintln!("检测到双击 Ctrl 开始热键，正在启动录音...");
-                                let _ = sender.send(());
+                            if !recently_triggered {
+                                if active.load(Ordering::SeqCst) {
+                                    eprintln!("检测到双击 Ctrl 停止热键，正在结束录音...");
+                                    recorder.stop();
+                                } else {
+                                    eprintln!("检测到双击 Ctrl 开始热键，正在启动录音...");
+                                    let _ = sender.send(());
+                                }
+                                last_trigger_at = Some(now);
                             }
                             last_ctrl_press = None;
                         } else {
@@ -281,6 +299,15 @@ impl LinuxHotkeyWatcher {
                     let pressed = spec.matches(&keys);
 
                     if pressed && !latched {
+                        let now = Instant::now();
+                        let recently_triggered = last_trigger_at
+                            .map(|last| now.duration_since(last) <= TRIGGER_COOLDOWN)
+                            .unwrap_or(false);
+                        if recently_triggered {
+                            latched = true;
+                            continue;
+                        }
+
                         if active.load(Ordering::SeqCst) {
                             eprintln!("检测到停止热键，正在结束录音...");
                             recorder.stop();
@@ -288,6 +315,7 @@ impl LinuxHotkeyWatcher {
                             eprintln!("检测到开始热键，正在启动录音...");
                             let _ = sender.send(());
                         }
+                        last_trigger_at = Some(now);
                         latched = true;
                     } else if !pressed {
                         latched = false;

@@ -49,7 +49,9 @@ mod linux_tray {
                 .disable_dbus_name(false)
                 .assume_sni_available(true)
                 .spawn()
-                .map_err(|err| VoiceInputError::Injection(format!("启动 Linux 状态栏失败：{err}")))?;
+                .map_err(|err| {
+                    VoiceInputError::Injection(format!("启动 Linux 状态栏失败：{err}"))
+                })?;
 
             Ok(Self {
                 handle,

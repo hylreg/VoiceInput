@@ -1,14 +1,17 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Cursor, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
+use std::{os::unix::net::UnixStream, path::PathBuf};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use hound::WavReader;
 use tempfile::NamedTempFile;
 
 use crate::config::FunAsrConfig;
-use crate::runner::{FunAsrRequest, FunAsrRunner};
+use crate::runner::{FunAsrRequest, FunAsrRunner, FunAsrStreamingRunner};
 use voice_input_core::{Result, VoiceInputError};
 
 const PYTHON_WORKER_SCRIPT: &str = r#"
@@ -151,6 +154,8 @@ import contextlib
 import json
 import os
 import sys
+import tempfile
+import wave
 
 import numpy as np
 from funasr import AutoModel
@@ -192,11 +197,9 @@ with contextlib.redirect_stdout(sys.stderr):
 
 print(json.dumps({"ready": True}), flush=True)
 
-cache = {}
-session_active = False
-chunk_size = [0, 8, 4]
-encoder_chunk_look_back = 4
-decoder_chunk_look_back = 1
+pending_samples = np.array([], dtype=np.float32)
+preview_window_seconds = 6
+sample_rate = 16000
 
 for line in sys.stdin:
     line = line.strip()
@@ -211,8 +214,7 @@ for line in sys.stdin:
         action = request.get("action", "chunk")
 
         if action == "reset":
-            cache = {}
-            session_active = False
+            pending_samples = np.array([], dtype=np.float32)
             print(json.dumps({"ok": True}), flush=True)
             continue
 
@@ -220,39 +222,52 @@ for line in sys.stdin:
             print(json.dumps({"error": f"unknown action: {action}"}), flush=True)
             continue
 
-        if not session_active:
-            cache = {}
-            session_active = True
-
         pcm = base64.b64decode(request["pcm_b64"])
-        speech_chunk = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        new_samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        pending_samples = np.concatenate([pending_samples, new_samples])
+        preview_window_seconds = int(request.get("preview_window_seconds", preview_window_seconds))
+        sample_rate = int(request.get("sample_rate", sample_rate))
+        is_final = request.get("is_final", False)
 
-        with contextlib.redirect_stdout(sys.stderr):
-            res = model.generate(
-                input=speech_chunk,
-                cache=cache,
-                batch_size=1,
-                hotwords=request.get("hotwords", []),
-                language=request.get("language"),
-                itn=request.get("itn", True),
-                chunk_size=request.get("chunk_size", chunk_size),
-                encoder_chunk_look_back=request.get(
-                    "encoder_chunk_look_back", encoder_chunk_look_back
-                ),
-                decoder_chunk_look_back=request.get(
-                    "decoder_chunk_look_back", decoder_chunk_look_back
-                ),
-                is_final=request.get("is_final", False),
-            )
+        if is_final:
+            inference_samples = pending_samples
+            pending_samples = np.array([], dtype=np.float32)
+        else:
+            preview_window_samples = max(int(preview_window_seconds * sample_rate), sample_rate)
+            inference_samples = pending_samples[-preview_window_samples:]
 
         text = ""
-        if isinstance(res, list) and res and isinstance(res[0], dict):
-            text = str(res[0].get("text", "")).strip()
+        if inference_samples.size > 0:
+            int16_samples = np.clip(inference_samples * 32768.0, -32768, 32767).astype(np.int16)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                wav_path = tmp.name
 
-        if request.get("is_final", False):
-            session_active = False
+            try:
+                with wave.open(wav_path, "wb") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(sample_rate)
+                    wav_file.writeframes(int16_samples.tobytes())
 
-        print(json.dumps({"text": text, "is_final": request.get("is_final", False)}), flush=True)
+                with contextlib.redirect_stdout(sys.stderr):
+                    res = model.generate(
+                        input=[wav_path],
+                        cache={},
+                        batch_size=1,
+                        hotwords=request.get("hotwords", []),
+                        language=request.get("language"),
+                        itn=request.get("itn", True),
+                    )
+
+                if isinstance(res, list) and res and isinstance(res[0], dict):
+                    text = str(res[0].get("text", "")).strip()
+            finally:
+                try:
+                    os.unlink(wav_path)
+                except OSError:
+                    pass
+
+        print(json.dumps({"text": text, "is_final": is_final}), flush=True)
     except Exception as exc:
         print(json.dumps({"error": str(exc)}), flush=True)
 "#;
@@ -328,7 +343,12 @@ impl PythonFunAsrWorker {
     fn spawn(python_bin: &str, config: &FunAsrConfig) -> Result<Self> {
         let mut command = if python_bin == "uv" {
             let mut command = Command::new(python_bin);
-            command.arg("run").arg("--").arg("python").arg("-c").arg(PYTHON_WORKER_SCRIPT);
+            command
+                .arg("run")
+                .arg("--")
+                .arg("python")
+                .arg("-c")
+                .arg(PYTHON_WORKER_SCRIPT);
             command
         } else {
             let mut command = Command::new(python_bin);
@@ -348,28 +368,27 @@ impl PythonFunAsrWorker {
             .spawn()
             .map_err(|e| VoiceInputError::Transcription(format!("启动 FunASR worker 失败：{e}")))?;
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| VoiceInputError::Transcription("获取 FunASR worker stdin 失败".to_string()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| VoiceInputError::Transcription("获取 FunASR worker stdout 失败".to_string()))?;
+        let stdin = child.stdin.take().ok_or_else(|| {
+            VoiceInputError::Transcription("获取 FunASR worker stdin 失败".to_string())
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            VoiceInputError::Transcription("获取 FunASR worker stdout 失败".to_string())
+        })?;
         let mut stdout = BufReader::new(stdout);
 
         let mut ready_line = String::new();
-        let read = stdout
-            .read_line(&mut ready_line)
-            .map_err(|e| VoiceInputError::Transcription(format!("等待 FunASR worker 就绪失败：{e}")))?;
+        let read = stdout.read_line(&mut ready_line).map_err(|e| {
+            VoiceInputError::Transcription(format!("等待 FunASR worker 就绪失败：{e}"))
+        })?;
         if read == 0 {
             return Err(VoiceInputError::Transcription(
                 "FunASR worker 启动后没有返回就绪信号".to_string(),
             ));
         }
 
-        let ready = serde_json::from_str::<serde_json::Value>(ready_line.trim())
-            .map_err(|e| VoiceInputError::Transcription(format!("解析 FunASR worker 就绪信号失败：{e}")))?;
+        let ready = serde_json::from_str::<serde_json::Value>(ready_line.trim()).map_err(|e| {
+            VoiceInputError::Transcription(format!("解析 FunASR worker 就绪信号失败：{e}"))
+        })?;
         if ready.get("ready").and_then(|value| value.as_bool()) != Some(true) {
             return Err(VoiceInputError::Transcription(format!(
                 "FunASR worker 就绪信号异常：{}",
@@ -391,36 +410,41 @@ impl PythonFunAsrWorker {
             "itn": request.config.itn,
             "hotwords": request.config.hotwords,
         });
-        serde_json::to_writer(&mut self.stdin, &payload)
-            .map_err(|e| VoiceInputError::Transcription(format!("写入 FunASR worker 请求失败：{e}")))?;
-        self.stdin
-            .write_all(b"\n")
-            .map_err(|e| VoiceInputError::Transcription(format!("发送 FunASR worker 请求失败：{e}")))?;
-        self.stdin
-            .flush()
-            .map_err(|e| VoiceInputError::Transcription(format!("刷新 FunASR worker 请求失败：{e}")))?;
+        serde_json::to_writer(&mut self.stdin, &payload).map_err(|e| {
+            VoiceInputError::Transcription(format!("写入 FunASR worker 请求失败：{e}"))
+        })?;
+        self.stdin.write_all(b"\n").map_err(|e| {
+            VoiceInputError::Transcription(format!("发送 FunASR worker 请求失败：{e}"))
+        })?;
+        self.stdin.flush().map_err(|e| {
+            VoiceInputError::Transcription(format!("刷新 FunASR worker 请求失败：{e}"))
+        })?;
 
         let mut response = String::new();
-        let read = self
-            .stdout
-            .read_line(&mut response)
-            .map_err(|e| VoiceInputError::Transcription(format!("读取 FunASR worker 响应失败：{e}")))?;
+        let read = self.stdout.read_line(&mut response).map_err(|e| {
+            VoiceInputError::Transcription(format!("读取 FunASR worker 响应失败：{e}"))
+        })?;
         if read == 0 {
             return Err(VoiceInputError::Transcription(
                 "FunASR worker 已退出".to_string(),
             ));
         }
 
-        let json: serde_json::Value = serde_json::from_str(response.trim())
-            .map_err(|e| VoiceInputError::Transcription(format!("解析 FunASR worker 响应失败：{e}")))?;
+        let json: serde_json::Value = serde_json::from_str(response.trim()).map_err(|e| {
+            VoiceInputError::Transcription(format!("解析 FunASR worker 响应失败：{e}"))
+        })?;
         if let Some(error) = json.get("error").and_then(|value| value.as_str()) {
-            return Err(VoiceInputError::Transcription(format!("FunASR worker 返回错误：{error}")));
+            return Err(VoiceInputError::Transcription(format!(
+                "FunASR worker 返回错误：{error}"
+            )));
         }
 
         let text = json
             .get("text")
             .and_then(|value| value.as_str())
-            .ok_or_else(|| VoiceInputError::Transcription("FunASR worker 响应缺少 text".to_string()))?;
+            .ok_or_else(|| {
+                VoiceInputError::Transcription("FunASR worker 响应缺少 text".to_string())
+            })?;
         Ok(text.trim().to_string())
     }
 
@@ -441,9 +465,9 @@ impl FunAsrRunner for PythonFunAsrRunner {
             .map_err(|e| VoiceInputError::Transcription(format!("写入临时音频文件失败：{e}")))?;
 
         if let Some(worker) = &self.worker {
-            let mut worker = worker
-                .lock()
-                .map_err(|_| VoiceInputError::Transcription("锁定 FunASR worker 失败".to_string()))?;
+            let mut worker = worker.lock().map_err(|_| {
+                VoiceInputError::Transcription("锁定 FunASR worker 失败".to_string())
+            })?;
             return worker.transcribe(audio_file.path(), &request);
         }
 
@@ -531,11 +555,15 @@ impl PythonFunAsrStreamingRunner {
         })
     }
 
-    pub fn stream_chunk(&self, samples: &[i16], sample_rate: u32, is_final: bool) -> Result<String> {
-        let mut worker = self
-            .worker
-            .lock()
-            .map_err(|_| VoiceInputError::Transcription("锁定 FunASR 流式 worker 失败".to_string()))?;
+    pub fn stream_chunk(
+        &self,
+        samples: &[i16],
+        sample_rate: u32,
+        is_final: bool,
+    ) -> Result<String> {
+        let mut worker = self.worker.lock().map_err(|_| {
+            VoiceInputError::Transcription("锁定 FunASR 流式 worker 失败".to_string())
+        })?;
         worker.stream_chunk(samples, sample_rate, is_final, &self.config)
     }
 }
@@ -544,7 +572,12 @@ impl PythonFunAsrStreamingWorker {
     fn spawn(python_bin: &str, config: &FunAsrConfig) -> Result<Self> {
         let mut command = if python_bin == "uv" {
             let mut command = Command::new(python_bin);
-            command.arg("run").arg("--").arg("python").arg("-c").arg(PYTHON_STREAM_SCRIPT);
+            command
+                .arg("run")
+                .arg("--")
+                .arg("python")
+                .arg("-c")
+                .arg(PYTHON_STREAM_SCRIPT);
             command
         } else {
             let mut command = Command::new(python_bin);
@@ -560,24 +593,22 @@ impl PythonFunAsrStreamingWorker {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
-        let mut child = command
-            .spawn()
-            .map_err(|e| VoiceInputError::Transcription(format!("启动 FunASR 流式 worker 失败：{e}")))?;
+        let mut child = command.spawn().map_err(|e| {
+            VoiceInputError::Transcription(format!("启动 FunASR 流式 worker 失败：{e}"))
+        })?;
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| VoiceInputError::Transcription("获取 FunASR 流式 worker stdin 失败".to_string()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| VoiceInputError::Transcription("获取 FunASR 流式 worker stdout 失败".to_string()))?;
+        let stdin = child.stdin.take().ok_or_else(|| {
+            VoiceInputError::Transcription("获取 FunASR 流式 worker stdin 失败".to_string())
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            VoiceInputError::Transcription("获取 FunASR 流式 worker stdout 失败".to_string())
+        })?;
         let mut stdout = BufReader::new(stdout);
 
         let mut ready_line = String::new();
-        let read = stdout
-            .read_line(&mut ready_line)
-            .map_err(|e| VoiceInputError::Transcription(format!("等待 FunASR 流式 worker 就绪失败：{e}")))?;
+        let read = stdout.read_line(&mut ready_line).map_err(|e| {
+            VoiceInputError::Transcription(format!("等待 FunASR 流式 worker 就绪失败：{e}"))
+        })?;
         if read == 0 {
             return Err(VoiceInputError::Transcription(
                 "FunASR 流式 worker 启动后没有返回就绪信号".to_string(),
@@ -619,28 +650,29 @@ impl PythonFunAsrStreamingWorker {
             "is_final": is_final,
         });
 
-        serde_json::to_writer(&mut self.stdin, &payload)
-            .map_err(|e| VoiceInputError::Transcription(format!("写入 FunASR 流式 worker 请求失败：{e}")))?;
-        self.stdin
-            .write_all(b"\n")
-            .map_err(|e| VoiceInputError::Transcription(format!("发送 FunASR 流式 worker 请求失败：{e}")))?;
-        self.stdin
-            .flush()
-            .map_err(|e| VoiceInputError::Transcription(format!("刷新 FunASR 流式 worker 请求失败：{e}")))?;
+        serde_json::to_writer(&mut self.stdin, &payload).map_err(|e| {
+            VoiceInputError::Transcription(format!("写入 FunASR 流式 worker 请求失败：{e}"))
+        })?;
+        self.stdin.write_all(b"\n").map_err(|e| {
+            VoiceInputError::Transcription(format!("发送 FunASR 流式 worker 请求失败：{e}"))
+        })?;
+        self.stdin.flush().map_err(|e| {
+            VoiceInputError::Transcription(format!("刷新 FunASR 流式 worker 请求失败：{e}"))
+        })?;
 
         let mut response = String::new();
-        let read = self
-            .stdout
-            .read_line(&mut response)
-            .map_err(|e| VoiceInputError::Transcription(format!("读取 FunASR 流式 worker 响应失败：{e}")))?;
+        let read = self.stdout.read_line(&mut response).map_err(|e| {
+            VoiceInputError::Transcription(format!("读取 FunASR 流式 worker 响应失败：{e}"))
+        })?;
         if read == 0 {
             return Err(VoiceInputError::Transcription(
                 "FunASR 流式 worker 已退出".to_string(),
             ));
         }
 
-        let json: serde_json::Value = serde_json::from_str(response.trim())
-            .map_err(|e| VoiceInputError::Transcription(format!("解析 FunASR 流式 worker 响应失败：{e}")))?;
+        let json: serde_json::Value = serde_json::from_str(response.trim()).map_err(|e| {
+            VoiceInputError::Transcription(format!("解析 FunASR 流式 worker 响应失败：{e}"))
+        })?;
         if let Some(error) = json.get("error").and_then(|value| value.as_str()) {
             return Err(VoiceInputError::Transcription(format!(
                 "FunASR 流式 worker 返回错误：{error}"
@@ -650,7 +682,9 @@ impl PythonFunAsrStreamingWorker {
         let text = json
             .get("text")
             .and_then(|value| value.as_str())
-            .ok_or_else(|| VoiceInputError::Transcription("FunASR 流式 worker 响应缺少 text".to_string()))?;
+            .ok_or_else(|| {
+                VoiceInputError::Transcription("FunASR 流式 worker 响应缺少 text".to_string())
+            })?;
         Ok(text.trim().to_string())
     }
 
@@ -667,6 +701,161 @@ impl Drop for PythonFunAsrStreamingRunner {
         if let Ok(mut worker) = self.worker.lock() {
             worker.shutdown();
         }
+    }
+}
+
+impl FunAsrStreamingRunner for PythonFunAsrStreamingRunner {
+    fn stream_chunk(&self, samples: &[i16], sample_rate: u32, is_final: bool) -> Result<String> {
+        PythonFunAsrStreamingRunner::stream_chunk(self, samples, sample_rate, is_final)
+    }
+}
+
+#[cfg(unix)]
+pub struct SocketFunAsrStreamingRunner {
+    stream: Arc<Mutex<SocketFunAsrStreamingConnection>>,
+    config: FunAsrConfig,
+}
+
+#[cfg(unix)]
+struct SocketFunAsrStreamingConnection {
+    writer: UnixStream,
+    reader: BufReader<UnixStream>,
+}
+
+#[cfg(unix)]
+impl SocketFunAsrStreamingRunner {
+    pub fn connect(socket_path: impl Into<PathBuf>, config: FunAsrConfig) -> Result<Self> {
+        let socket_path = socket_path.into();
+        let stream = UnixStream::connect(&socket_path).map_err(|e| {
+            VoiceInputError::Transcription(format!(
+                "连接 FunASR 开发调试 socket 失败 {}：{e}",
+                socket_path.display()
+            ))
+        })?;
+        let reader = stream
+            .try_clone()
+            .map(BufReader::new)
+            .map_err(|e| VoiceInputError::Transcription(format!("克隆 FunASR socket 失败：{e}")))?;
+
+        let mut connection = SocketFunAsrStreamingConnection {
+            writer: stream,
+            reader,
+        };
+        connection.wait_ready()?;
+
+        Ok(Self {
+            stream: Arc::new(Mutex::new(connection)),
+            config,
+        })
+    }
+
+    pub fn stream_chunk(
+        &self,
+        samples: &[i16],
+        sample_rate: u32,
+        is_final: bool,
+    ) -> Result<String> {
+        let mut connection = self.stream.lock().map_err(|_| {
+            VoiceInputError::Transcription("锁定 FunASR 开发调试 socket 失败".to_string())
+        })?;
+        connection.stream_chunk(samples, sample_rate, is_final, &self.config)
+    }
+}
+
+#[cfg(unix)]
+impl FunAsrStreamingRunner for SocketFunAsrStreamingRunner {
+    fn stream_chunk(&self, samples: &[i16], sample_rate: u32, is_final: bool) -> Result<String> {
+        SocketFunAsrStreamingRunner::stream_chunk(self, samples, sample_rate, is_final)
+    }
+}
+
+impl FunAsrRunner for SocketFunAsrStreamingRunner {
+    fn transcribe(&self, request: FunAsrRequest) -> Result<String> {
+        let (samples, sample_rate) = wav_bytes_to_pcm16(&request.audio_bytes)?;
+        self.stream_chunk(&samples, sample_rate, true)
+    }
+}
+
+#[cfg(unix)]
+impl SocketFunAsrStreamingConnection {
+    fn wait_ready(&mut self) -> Result<()> {
+        let mut ready_line = String::new();
+        let read = self.reader.read_line(&mut ready_line).map_err(|e| {
+            VoiceInputError::Transcription(format!("等待 FunASR 开发调试服务就绪失败：{e}"))
+        })?;
+        if read == 0 {
+            return Err(VoiceInputError::Transcription(
+                "FunASR 开发调试服务启动后没有返回就绪信号".to_string(),
+            ));
+        }
+
+        let ready = serde_json::from_str::<serde_json::Value>(ready_line.trim()).map_err(|e| {
+            VoiceInputError::Transcription(format!("解析 FunASR 开发调试服务就绪信号失败：{e}"))
+        })?;
+        if ready.get("ready").and_then(|value| value.as_bool()) != Some(true) {
+            return Err(VoiceInputError::Transcription(format!(
+                "FunASR 开发调试服务就绪信号异常：{}",
+                ready
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn stream_chunk(
+        &mut self,
+        samples: &[i16],
+        sample_rate: u32,
+        is_final: bool,
+        config: &FunAsrConfig,
+    ) -> Result<String> {
+        let normalized = resample_pcm16(samples, sample_rate, 16_000);
+        let pcm_bytes = pcm16_to_bytes(&normalized);
+        let payload = serde_json::json!({
+            "action": "chunk",
+            "pcm_b64": BASE64.encode(pcm_bytes),
+            "language": config.language,
+            "itn": config.itn,
+            "hotwords": config.hotwords,
+            "is_final": is_final,
+        });
+
+        serde_json::to_writer(&mut self.writer, &payload).map_err(|e| {
+            VoiceInputError::Transcription(format!("写入 FunASR 开发调试请求失败：{e}"))
+        })?;
+        self.writer.write_all(b"\n").map_err(|e| {
+            VoiceInputError::Transcription(format!("发送 FunASR 开发调试请求失败：{e}"))
+        })?;
+        self.writer.flush().map_err(|e| {
+            VoiceInputError::Transcription(format!("刷新 FunASR 开发调试请求失败：{e}"))
+        })?;
+
+        let mut response = String::new();
+        let read = self.reader.read_line(&mut response).map_err(|e| {
+            VoiceInputError::Transcription(format!("读取 FunASR 开发调试响应失败：{e}"))
+        })?;
+        if read == 0 {
+            return Err(VoiceInputError::Transcription(
+                "FunASR 开发调试服务已断开".to_string(),
+            ));
+        }
+
+        let json: serde_json::Value = serde_json::from_str(response.trim()).map_err(|e| {
+            VoiceInputError::Transcription(format!("解析 FunASR 开发调试响应失败：{e}"))
+        })?;
+        if let Some(error) = json.get("error").and_then(|value| value.as_str()) {
+            return Err(VoiceInputError::Transcription(format!(
+                "FunASR 开发调试服务返回错误：{error}"
+            )));
+        }
+
+        let text = json
+            .get("text")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                VoiceInputError::Transcription("FunASR 开发调试响应缺少 text".to_string())
+            })?;
+        Ok(text.trim().to_string())
     }
 }
 
@@ -707,6 +896,32 @@ fn pcm16_to_bytes(samples: &[i16]) -> Vec<u8> {
         bytes.extend_from_slice(&sample.to_le_bytes());
     }
     bytes
+}
+
+fn wav_bytes_to_pcm16(audio_bytes: &[u8]) -> Result<(Vec<i16>, u32)> {
+    let reader = WavReader::new(Cursor::new(audio_bytes))
+        .map_err(|e| VoiceInputError::Transcription(format!("解析 WAV 音频失败：{e}")))?;
+    let spec = reader.spec();
+
+    if spec.channels != 1
+        || spec.bits_per_sample != 16
+        || spec.sample_format != hound::SampleFormat::Int
+    {
+        return Err(VoiceInputError::Transcription(format!(
+            "仅支持单声道 16-bit PCM WAV，当前格式：channels={} bits_per_sample={} sample_format={:?}",
+            spec.channels, spec.bits_per_sample, spec.sample_format
+        )));
+    }
+
+    let mut samples = Vec::new();
+    for sample in reader.into_samples::<i16>() {
+        samples.push(
+            sample
+                .map_err(|e| VoiceInputError::Transcription(format!("读取 WAV 采样失败：{e}")))?,
+        );
+    }
+
+    Ok((samples, spec.sample_rate))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
+use voice_input_asr::MockFunAsrRunner;
 use voice_input_core::InputMethodHost;
 use voice_input_core::{AppConfig, MockAudioRecorder, MockHotkeyManager};
-use voice_input_asr::MockFunAsrRunner;
 use voice_input_linux::{
     IbusEngineEvent, LinuxBackendKind, LinuxCompositionSession, LinuxHostConfig,
     LinuxInputMethodHost, LinuxLocalVoiceInput, LinuxLocalVoiceInputConfig, MockIbusBridge,

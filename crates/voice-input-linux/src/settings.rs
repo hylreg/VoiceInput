@@ -14,7 +14,7 @@ pub struct LinuxAppSettings {
 impl Default for LinuxAppSettings {
     fn default() -> Self {
         Self {
-            double_ctrl_window_ms: 200,
+            double_ctrl_window_ms: 300,
             silence_stop_timeout_ms: 900,
         }
     }
@@ -32,16 +32,14 @@ impl LinuxAppSettings {
     pub fn save(&self) -> Result<(), String> {
         let path = settings_path();
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                format!("创建配置目录失败 {}：{err}", parent.display())
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("创建配置目录失败 {}：{err}", parent.display()))?;
         }
 
-        let content = toml::to_string_pretty(self)
-            .map_err(|err| format!("序列化配置失败：{err}"))?;
-        fs::write(&path, content).map_err(|err| {
-            format!("写入配置文件失败 {}：{err}", path.display())
-        })
+        let content =
+            toml::to_string_pretty(self).map_err(|err| format!("序列化配置失败：{err}"))?;
+        fs::write(&path, content)
+            .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))
     }
 }
 

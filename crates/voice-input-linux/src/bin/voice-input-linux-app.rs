@@ -104,17 +104,21 @@ impl Args {
                     let value = iter
                         .next()
                         .ok_or_else(|| String::from("缺少 --double-ctrl-window-ms 的值"))?;
-                    double_ctrl_window_ms = Some(value
-                        .parse::<u64>()
-                        .map_err(|_| String::from("--double-ctrl-window-ms 必须是整数毫秒"))?);
+                    double_ctrl_window_ms = Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| String::from("--double-ctrl-window-ms 必须是整数毫秒"))?,
+                    );
                 }
                 "--silence-stop-ms" => {
                     let value = iter
                         .next()
                         .ok_or_else(|| String::from("缺少 --silence-stop-ms 的值"))?;
-                    silence_stop_ms = Some(value
-                        .parse::<u64>()
-                        .map_err(|_| String::from("--silence-stop-ms 必须是整数毫秒"))?);
+                    silence_stop_ms = Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| String::from("--silence-stop-ms 必须是整数毫秒"))?,
+                    );
                 }
                 "--help" | "-h" => return Err(String::from("help")),
                 other => return Err(format!("不支持的参数：{other}")),
@@ -139,6 +143,6 @@ fn parse_backend(value: &str) -> Result<LinuxBackendKind, String> {
 
 fn print_usage() {
     eprintln!(
-        "用法：cargo run -p voice-input-linux --bin voice-input-linux-app -- --backend ibus [--double-ctrl-window-ms 200] [--silence-stop-ms 900]"
+        "用法：cargo run -p voice-input-linux --bin voice-input-linux-app -- --backend ibus [--double-ctrl-window-ms 300] [--silence-stop-ms 900]"
     );
 }

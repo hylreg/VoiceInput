@@ -1,17 +1,17 @@
 use std::ptr;
-use std::sync::Once;
 use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::Once;
 
 use cocoa::base::{id, nil};
-use cocoa_foundation::foundation::NSRange;
 use cocoa::foundation::NSString;
+use cocoa_foundation::foundation::NSRange;
 use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel};
 use objc::{msg_send, sel, sel_impl};
 
-use crate::bridge::MacImeBridge;
 #[cfg(target_os = "macos")]
 use crate::bridge::paste_text_and_restore_clipboard;
+use crate::bridge::MacImeBridge;
 use voice_input_core::Result;
 
 static ACTIVE_CONTROLLER: AtomicPtr<Object> = AtomicPtr::new(ptr::null_mut());
@@ -21,10 +21,10 @@ static REGISTER_EXTENSION_DELEGATE: Once = Once::new();
 #[cfg(target_os = "macos")]
 pub fn register_input_controller_class() {
     REGISTER_CONTROLLER.call_once(|| unsafe {
-        let superclass = Class::get("IMKInputController")
-            .expect("InputMethodKit 未提供 IMKInputController");
-        let mut decl = ClassDecl::new("VoiceInputInputController", superclass)
-            .expect("注册输入法控制器类");
+        let superclass =
+            Class::get("IMKInputController").expect("InputMethodKit 未提供 IMKInputController");
+        let mut decl =
+            ClassDecl::new("VoiceInputInputController", superclass).expect("注册输入法控制器类");
         decl.add_ivar::<*mut Object>("rustOwner");
         decl.add_method(
             sel!(initWithServer:delegate:client:),
@@ -54,10 +54,16 @@ fn register_extension_delegate_class() {
 }
 
 #[cfg(target_os = "macos")]
-extern "C" fn voiceinput_init(this: &mut Object, _cmd: Sel, server: id, delegate: id, client: id) -> id {
+extern "C" fn voiceinput_init(
+    this: &mut Object,
+    _cmd: Sel,
+    server: id,
+    delegate: id,
+    client: id,
+) -> id {
     unsafe {
-        let superclass = Class::get("IMKInputController")
-            .expect("InputMethodKit 未提供 IMKInputController");
+        let superclass =
+            Class::get("IMKInputController").expect("InputMethodKit 未提供 IMKInputController");
         let initialized: id = msg_send![super(this, superclass), initWithServer:server delegate:delegate client:client];
         if initialized != nil {
             set_active_controller(initialized);
@@ -70,8 +76,8 @@ extern "C" fn voiceinput_init(this: &mut Object, _cmd: Sel, server: id, delegate
 extern "C" fn voiceinput_dealloc(this: &mut Object, _cmd: Sel) {
     clear_active_controller();
     unsafe {
-        let superclass = Class::get("IMKInputController")
-            .expect("InputMethodKit 未提供 IMKInputController");
+        let superclass =
+            Class::get("IMKInputController").expect("InputMethodKit 未提供 IMKInputController");
         let _: () = msg_send![super(this, superclass), dealloc];
     }
 }
@@ -188,22 +194,32 @@ impl Default for InputMethodKitMacImeBridge {
 #[cfg(not(target_os = "macos"))]
 impl MacImeBridge for InputMethodKitMacImeBridge {
     fn start_composition(&self) -> Result<()> {
-        Err(VoiceInputError::Injection("InputMethodKit 桥接只支持 macOS".to_string()))
+        Err(VoiceInputError::Injection(
+            "InputMethodKit 桥接只支持 macOS".to_string(),
+        ))
     }
 
     fn update_preedit(&self, _text: &str) -> Result<()> {
-        Err(VoiceInputError::Injection("InputMethodKit 桥接只支持 macOS".to_string()))
+        Err(VoiceInputError::Injection(
+            "InputMethodKit 桥接只支持 macOS".to_string(),
+        ))
     }
 
     fn commit_text(&self, _text: &str) -> Result<()> {
-        Err(VoiceInputError::Injection("InputMethodKit 桥接只支持 macOS".to_string()))
+        Err(VoiceInputError::Injection(
+            "InputMethodKit 桥接只支持 macOS".to_string(),
+        ))
     }
 
     fn cancel_composition(&self) -> Result<()> {
-        Err(VoiceInputError::Injection("InputMethodKit 桥接只支持 macOS".to_string()))
+        Err(VoiceInputError::Injection(
+            "InputMethodKit 桥接只支持 macOS".to_string(),
+        ))
     }
 
     fn end_composition(&self) -> Result<()> {
-        Err(VoiceInputError::Injection("InputMethodKit 桥接只支持 macOS".to_string()))
+        Err(VoiceInputError::Injection(
+            "InputMethodKit 桥接只支持 macOS".to_string(),
+        ))
     }
 }
