@@ -15,7 +15,7 @@ impl Default for LinuxLocalVoiceInputConfig {
         Self {
             app: AppConfig::default(),
             host: LinuxHostConfig::default(),
-            asr: FunAsrConfig::default(),
+            asr: FunAsrConfig::from_env(),
         }
     }
 }

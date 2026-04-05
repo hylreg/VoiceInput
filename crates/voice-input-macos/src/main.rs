@@ -1,7 +1,7 @@
 use std::env;
 use std::path::PathBuf;
 
-use voice_input_asr::{FunAsrConfig, PythonFunAsrRunner};
+use voice_input_asr::FunAsrConfig;
 use voice_input_core::{AppConfig, MockHotkeyManager};
 use voice_input_macos::{
     FileAudioRecorder, MacHostConfig, MacLocalVoiceInput, MacLocalVoiceInputConfig,
@@ -20,10 +20,11 @@ fn main() {
 
     let bridge = MockMacImeBridge::default();
     let bridge_for_output = bridge.clone();
-    let asr_runner = match voice_input_asr::PythonFunAsrRunner::connect(FunAsrConfig::default()) {
+    let asr_config = FunAsrConfig::from_env();
+    let asr_runner = match voice_input_asr::PythonFunAsrRunner::connect(asr_config.clone()) {
         Ok(runner) => runner,
         Err(err) => {
-            eprintln!("预加载 FunASR 模型失败：{err}");
+            eprintln!("预加载 ASR 模型失败：{err}");
             std::process::exit(1);
         }
     };
@@ -32,7 +33,7 @@ fn main() {
         MacLocalVoiceInputConfig {
             app: AppConfig::default(),
             host: MacHostConfig::default(),
-            asr: FunAsrConfig::default(),
+            asr: asr_config,
         },
         Box::new(MockHotkeyManager),
         Box::new(FileAudioRecorder::new(audio_path)),

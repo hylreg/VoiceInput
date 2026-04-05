@@ -14,7 +14,7 @@ impl Default for MacLocalVoiceInputConfig {
         Self {
             app: AppConfig::default(),
             host: MacHostConfig::default(),
-            asr: FunAsrConfig::default(),
+            asr: FunAsrConfig::from_env(),
         }
     }
 }

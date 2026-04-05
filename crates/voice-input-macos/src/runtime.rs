@@ -52,7 +52,7 @@ mod mac_runtime {
             Self {
                 app: AppConfig::default(),
                 host: MacHostConfig::default(),
-                asr: FunAsrConfig::default(),
+                asr: FunAsrConfig::from_env(),
                 max_recording_duration: Duration::from_secs(12),
                 show_status_item: true,
                 commit_backend: MacCommitBackend::Clipboard,
@@ -232,9 +232,9 @@ mod mac_runtime {
                 MacCommitBackend::InputMethodKit => Box::new(InputMethodKitMacImeBridge::default()),
             };
             let host = MacInputMethodHost::new_with_bridge(config.host.clone(), bridge);
-            println!("正在预加载 FunASR 模型...");
+            println!("正在预加载 ASR 模型...");
             let asr_runner = PythonFunAsrRunner::connect(config.asr.clone())?;
-            println!("FunASR 模型预加载完成");
+            println!("ASR 模型预加载完成");
             let transcriber =
                 voice_input_asr::LocalFunAsrTranscriber::new(config.asr, Box::new(asr_runner));
             let controller = AppController::new(

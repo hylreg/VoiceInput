@@ -42,7 +42,7 @@ mod linux_runtime {
                     backend: LinuxBackendKind::IBus,
                     service_name: "voice-input".to_string(),
                 },
-                asr: FunAsrConfig::default(),
+                asr: FunAsrConfig::from_env(),
                 max_recording_duration: Duration::from_secs(30),
                 double_ctrl_window: Duration::from_millis(300),
                 silence_stop_timeout: Duration::from_millis(1500),
@@ -106,10 +106,10 @@ mod linux_runtime {
             config.double_ctrl_window,
         )?;
         let host = LinuxInputMethodHost::new(config.host.clone());
-        println!("正在预加载 FunASR 模型...");
+        println!("正在预加载 ASR 模型...");
         let asr_runner: Box<dyn FunAsrRunner> =
             if let Ok(socket_path) = env::var("VOICEINPUT_FUNASR_SOCKET") {
-                println!("检测到外部 FunASR 调试服务：{socket_path}");
+                println!("检测到外部 ASR 调试服务：{socket_path}");
                 Box::new(SocketFunAsrStreamingRunner::connect(
                     socket_path,
                     config.asr.clone(),
@@ -118,7 +118,7 @@ mod linux_runtime {
                 Box::new(PythonFunAsrRunner::connect(config.asr.clone())?)
             };
         let transcriber = LocalFunAsrTranscriber::new(config.asr.clone(), asr_runner);
-        println!("FunASR 模型预加载完成");
+        println!("ASR 模型预加载完成");
         let tray = if config.show_status_item {
             let tray = spawn_linux_tray(LinuxTrayConfig::new(
                 config.host.service_name.clone(),

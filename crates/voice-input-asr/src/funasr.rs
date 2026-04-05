@@ -272,6 +272,137 @@ for line in sys.stdin:
         print(json.dumps({"error": str(exc)}), flush=True)
 "#;
 
+const PYTHON_QWEN_WORKER_SCRIPT: &str = r#"
+import contextlib
+import json
+import os
+import sys
+
+import torch
+from qwen_asr import Qwen3ASRModel
+
+model_dir = sys.argv[1]
+device = sys.argv[2]
+
+if device == "cuda":
+    device_map = "cuda:0"
+    dtype = torch.bfloat16
+else:
+    device_map = "cpu"
+    dtype = torch.float32
+
+with contextlib.redirect_stdout(sys.stderr):
+    model = Qwen3ASRModel.from_pretrained(
+        model_dir,
+        device_map=device_map,
+        dtype=dtype,
+        max_inference_batch_size=1,
+    )
+
+print(json.dumps({"ready": True}), flush=True)
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+
+    if line == "__quit__":
+        break
+
+    try:
+        request = json.loads(line)
+        audio_path = request["audio_path"]
+        language = request.get("language")
+        if language in ("", None, "auto", "automatic", "自动"):
+            language = None
+
+        with contextlib.redirect_stdout(sys.stderr):
+            res = model.transcribe(
+                audio=audio_path,
+                context="",
+                language=language,
+                return_time_stamps=False,
+            )
+
+        text = ""
+        if isinstance(res, list) and res:
+            first = res[0]
+            text = getattr(first, "text", "")
+            if not text and isinstance(first, dict):
+                text = str(first.get("text", ""))
+        elif isinstance(res, dict):
+            text = str(res.get("text", ""))
+        elif hasattr(res, "text"):
+            text = str(getattr(res, "text"))
+
+        print(json.dumps({"text": text.strip()}), flush=True)
+    except Exception as exc:
+        print(json.dumps({"error": str(exc)}), flush=True)
+"#;
+
+const PYTHON_QWEN_SCRIPT: &str = r#"
+import contextlib
+import json
+import sys
+
+import torch
+from qwen_asr import Qwen3ASRModel
+
+model_dir = sys.argv[1]
+audio_path = sys.argv[2]
+device = sys.argv[3]
+language = sys.argv[4]
+
+if language in ("", "auto", "automatic", "自动"):
+    language = None
+
+if device == "cuda":
+    device_map = "cuda:0"
+    dtype = torch.bfloat16
+else:
+    device_map = "cpu"
+    dtype = torch.float32
+
+with contextlib.redirect_stdout(sys.stderr):
+    model = Qwen3ASRModel.from_pretrained(
+        model_dir,
+        device_map=device_map,
+        dtype=dtype,
+        max_inference_batch_size=1,
+    )
+    res = model.transcribe(
+        audio=audio_path,
+        context="",
+        language=language,
+        return_time_stamps=False,
+    )
+
+text = ""
+if isinstance(res, list) and res:
+    first = res[0]
+    text = getattr(first, "text", "")
+    if not text and isinstance(first, dict):
+        text = str(first.get("text", ""))
+elif isinstance(res, dict):
+    text = str(res.get("text", ""))
+elif hasattr(res, "text"):
+    text = str(getattr(res, "text"))
+
+print(text.strip())
+"#;
+
+fn python_command(python_bin: &str, script: &str) -> Command {
+    if python_bin == "uv" {
+        let mut command = Command::new(python_bin);
+        command.arg("run").arg("--").arg("python").arg("-c").arg(script);
+        command
+    } else {
+        let mut command = Command::new(python_bin);
+        command.arg("-c").arg(script);
+        command
+    }
+}
+
 pub struct PythonFunAsrRunner {
     python_bin: String,
     worker: Option<Arc<Mutex<PythonFunAsrWorker>>>,
@@ -341,57 +472,58 @@ impl PythonFunAsrRunner {
 
 impl PythonFunAsrWorker {
     fn spawn(python_bin: &str, config: &FunAsrConfig) -> Result<Self> {
-        let mut command = if python_bin == "uv" {
-            let mut command = Command::new(python_bin);
-            command
-                .arg("run")
-                .arg("--")
-                .arg("python")
-                .arg("-c")
-                .arg(PYTHON_WORKER_SCRIPT);
-            command
+        let script = if config.is_qwen() {
+            PYTHON_QWEN_WORKER_SCRIPT
         } else {
-            let mut command = Command::new(python_bin);
-            command.arg("-c").arg(PYTHON_WORKER_SCRIPT);
-            command
+            PYTHON_WORKER_SCRIPT
         };
 
-        command
-            .arg(&config.model_dir)
-            .arg(&config.remote_code)
-            .arg(&config.device)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+        let mut command = python_command(python_bin, script);
+        if config.is_qwen() {
+            command
+                .arg(&config.model_dir)
+                .arg(&config.device)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit());
+        } else {
+            command
+                .arg(&config.model_dir)
+                .arg(&config.remote_code)
+                .arg(&config.device)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit());
+        }
 
         let mut child = command
             .spawn()
-            .map_err(|e| VoiceInputError::Transcription(format!("启动 FunASR worker 失败：{e}")))?;
+            .map_err(|e| VoiceInputError::Transcription(format!("启动 ASR worker 失败：{e}")))?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
-            VoiceInputError::Transcription("获取 FunASR worker stdin 失败".to_string())
+            VoiceInputError::Transcription("获取 ASR worker stdin 失败".to_string())
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
-            VoiceInputError::Transcription("获取 FunASR worker stdout 失败".to_string())
+            VoiceInputError::Transcription("获取 ASR worker stdout 失败".to_string())
         })?;
         let mut stdout = BufReader::new(stdout);
 
         let mut ready_line = String::new();
         let read = stdout.read_line(&mut ready_line).map_err(|e| {
-            VoiceInputError::Transcription(format!("等待 FunASR worker 就绪失败：{e}"))
+            VoiceInputError::Transcription(format!("等待 ASR worker 就绪失败：{e}"))
         })?;
         if read == 0 {
             return Err(VoiceInputError::Transcription(
-                "FunASR worker 启动后没有返回就绪信号".to_string(),
+                "ASR worker 启动后没有返回就绪信号".to_string(),
             ));
         }
 
         let ready = serde_json::from_str::<serde_json::Value>(ready_line.trim()).map_err(|e| {
-            VoiceInputError::Transcription(format!("解析 FunASR worker 就绪信号失败：{e}"))
+            VoiceInputError::Transcription(format!("解析 ASR worker 就绪信号失败：{e}"))
         })?;
         if ready.get("ready").and_then(|value| value.as_bool()) != Some(true) {
             return Err(VoiceInputError::Transcription(format!(
-                "FunASR worker 就绪信号异常：{}",
+                "ASR worker 就绪信号异常：{}",
                 ready
             )));
         }
@@ -404,38 +536,45 @@ impl PythonFunAsrWorker {
     }
 
     fn transcribe(&mut self, audio_path: &Path, request: &FunAsrRequest) -> Result<String> {
-        let payload = serde_json::json!({
-            "audio_path": audio_path,
-            "language": request.config.language,
-            "itn": request.config.itn,
-            "hotwords": request.config.hotwords,
-        });
+        let payload = if request.config.is_qwen() {
+            serde_json::json!({
+                "audio_path": audio_path,
+                "language": request.config.qwen_language(),
+            })
+        } else {
+            serde_json::json!({
+                "audio_path": audio_path,
+                "language": request.config.language,
+                "itn": request.config.itn,
+                "hotwords": request.config.hotwords,
+            })
+        };
         serde_json::to_writer(&mut self.stdin, &payload).map_err(|e| {
-            VoiceInputError::Transcription(format!("写入 FunASR worker 请求失败：{e}"))
+            VoiceInputError::Transcription(format!("写入 ASR worker 请求失败：{e}"))
         })?;
         self.stdin.write_all(b"\n").map_err(|e| {
-            VoiceInputError::Transcription(format!("发送 FunASR worker 请求失败：{e}"))
+            VoiceInputError::Transcription(format!("发送 ASR worker 请求失败：{e}"))
         })?;
         self.stdin.flush().map_err(|e| {
-            VoiceInputError::Transcription(format!("刷新 FunASR worker 请求失败：{e}"))
+            VoiceInputError::Transcription(format!("刷新 ASR worker 请求失败：{e}"))
         })?;
 
         let mut response = String::new();
         let read = self.stdout.read_line(&mut response).map_err(|e| {
-            VoiceInputError::Transcription(format!("读取 FunASR worker 响应失败：{e}"))
+            VoiceInputError::Transcription(format!("读取 ASR worker 响应失败：{e}"))
         })?;
         if read == 0 {
             return Err(VoiceInputError::Transcription(
-                "FunASR worker 已退出".to_string(),
+                "ASR worker 已退出".to_string(),
             ));
         }
 
         let json: serde_json::Value = serde_json::from_str(response.trim()).map_err(|e| {
-            VoiceInputError::Transcription(format!("解析 FunASR worker 响应失败：{e}"))
+            VoiceInputError::Transcription(format!("解析 ASR worker 响应失败：{e}"))
         })?;
         if let Some(error) = json.get("error").and_then(|value| value.as_str()) {
             return Err(VoiceInputError::Transcription(format!(
-                "FunASR worker 返回错误：{error}"
+                "ASR worker 返回错误：{error}"
             )));
         }
 
@@ -443,7 +582,7 @@ impl PythonFunAsrWorker {
             .get("text")
             .and_then(|value| value.as_str())
             .ok_or_else(|| {
-                VoiceInputError::Transcription("FunASR worker 响应缺少 text".to_string())
+                VoiceInputError::Transcription("ASR worker 响应缺少 text".to_string())
             })?;
         Ok(text.trim().to_string())
     }
@@ -464,9 +603,56 @@ impl FunAsrRunner for PythonFunAsrRunner {
             .write_all(&request.audio_bytes)
             .map_err(|e| VoiceInputError::Transcription(format!("写入临时音频文件失败：{e}")))?;
 
+        if request.config.is_qwen() {
+            let output = if self.python_bin == "uv" {
+                Command::new(&self.python_bin)
+                    .arg("run")
+                    .arg("--")
+                    .arg("python")
+                    .arg("-c")
+                    .arg(PYTHON_QWEN_SCRIPT)
+                    .arg(&request.config.model_dir)
+                    .arg(audio_file.path())
+                    .arg(&request.config.device)
+                    .arg(&request.config.language)
+                    .output()
+                    .map_err(|e| {
+                        VoiceInputError::Transcription(format!(
+                            "通过 uv 启动 Qwen ASR Python 进程失败：{e}"
+                        ))
+                    })?
+            } else {
+                Command::new(&self.python_bin)
+                    .arg("-c")
+                    .arg(PYTHON_QWEN_SCRIPT)
+                    .arg(&request.config.model_dir)
+                    .arg(audio_file.path())
+                    .arg(&request.config.device)
+                    .arg(&request.config.language)
+                    .output()
+                    .map_err(|e| {
+                        VoiceInputError::Transcription(format!(
+                            "启动 Qwen ASR Python 进程失败：{e}"
+                        ))
+                    })?
+            };
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(VoiceInputError::Transcription(format!(
+                    "Qwen ASR 进程失败：{stderr}"
+                )));
+            }
+
+            let text = String::from_utf8(output.stdout).map_err(|e| {
+                VoiceInputError::Transcription(format!("Qwen ASR 输出不是有效的 UTF-8：{e}"))
+            })?;
+            return Ok(text.trim().to_string());
+        }
+
         if let Some(worker) = &self.worker {
             let mut worker = worker.lock().map_err(|_| {
-                VoiceInputError::Transcription("锁定 FunASR worker 失败".to_string())
+                VoiceInputError::Transcription("锁定 ASR worker 失败".to_string())
             })?;
             return worker.transcribe(audio_file.path(), &request);
         }
@@ -489,7 +675,7 @@ impl FunAsrRunner for PythonFunAsrRunner {
                 .output()
                 .map_err(|e| {
                     VoiceInputError::Transcription(format!(
-                        "通过 uv 启动 FunASR Python 进程失败：{e}"
+                        "通过 uv 启动 ASR Python 进程失败：{e}"
                     ))
                 })?
         } else {
@@ -505,19 +691,19 @@ impl FunAsrRunner for PythonFunAsrRunner {
                 .arg(hotwords_json)
                 .output()
                 .map_err(|e| {
-                    VoiceInputError::Transcription(format!("启动 FunASR Python 进程失败：{e}"))
+                    VoiceInputError::Transcription(format!("启动 ASR Python 进程失败：{e}"))
                 })?
         };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(VoiceInputError::Transcription(format!(
-                "FunASR 进程失败：{stderr}"
+                "ASR 进程失败：{stderr}"
             )));
         }
 
         let text = String::from_utf8(output.stdout).map_err(|e| {
-            VoiceInputError::Transcription(format!("FunASR 输出不是有效的 UTF-8：{e}"))
+            VoiceInputError::Transcription(format!("ASR 输出不是有效的 UTF-8：{e}"))
         })?;
         Ok(text.trim().to_string())
     }
@@ -546,6 +732,11 @@ struct PythonFunAsrStreamingWorker {
 
 impl PythonFunAsrStreamingRunner {
     pub fn connect(config: FunAsrConfig) -> Result<Self> {
+        if config.is_qwen() {
+            return Err(VoiceInputError::Transcription(
+                "Qwen/Qwen3-ASR-1.7B 目前不支持 FunASR 流式调试服务".to_string(),
+            ));
+        }
         let runner = PythonFunAsrRunner::default();
         let worker = PythonFunAsrStreamingWorker::spawn(&runner.python_bin, &config)?;
 
@@ -725,6 +916,11 @@ struct SocketFunAsrStreamingConnection {
 #[cfg(unix)]
 impl SocketFunAsrStreamingRunner {
     pub fn connect(socket_path: impl Into<PathBuf>, config: FunAsrConfig) -> Result<Self> {
+        if config.is_qwen() {
+            return Err(VoiceInputError::Transcription(
+                "Qwen/Qwen3-ASR-1.7B 目前不支持 FunASR 开发调试 socket".to_string(),
+            ));
+        }
         let socket_path = socket_path.into();
         let stream = UnixStream::connect(&socket_path).map_err(|e| {
             VoiceInputError::Transcription(format!(

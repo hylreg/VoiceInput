@@ -30,10 +30,11 @@ fn main() {
         }
     };
 
-    let asr_runner = match PythonFunAsrRunner::connect(FunAsrConfig::default()) {
+    let asr_config = FunAsrConfig::from_env();
+    let asr_runner = match PythonFunAsrRunner::connect(asr_config.clone()) {
         Ok(runner) => runner,
         Err(err) => {
-            eprintln!("预加载 FunASR 模型失败：{err}");
+            eprintln!("预加载 ASR 模型失败：{err}");
             std::process::exit(1);
         }
     };
@@ -45,7 +46,7 @@ fn main() {
                 backend: args.backend,
                 service_name: "voice-input".to_string(),
             },
-            asr: FunAsrConfig::default(),
+            asr: asr_config,
         },
         Box::new(MockHotkeyManager),
         Box::new(FileAudioRecorder::new(args.audio_file)),

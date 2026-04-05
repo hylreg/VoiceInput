@@ -44,4 +44,5 @@ fn local_mac_pipeline_uses_funasr_and_drives_ime_events() {
         recorded[0].source_url,
         "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
     );
+    assert_eq!(recorded[0].model_id, "FunAudioLLM/Fun-ASR-Nano-2512");
 }

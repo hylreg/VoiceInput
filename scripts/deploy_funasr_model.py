@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Download FunAudioLLM/Fun-ASR-Nano-2512 from ModelScope into the local cache dir.
+Download a supported local ASR model into the cache dir.
 
-This keeps the runtime offline-friendly after the first download.
+FunASR models are fetched from ModelScope and Qwen/Qwen3-ASR-1.7B is fetched
+from Hugging Face. The local cache keeps the runtime offline-friendly after the
+first download.
 """
 
 from __future__ import annotations
@@ -17,9 +19,19 @@ import tempfile
 from pathlib import Path
 
 
-DEFAULT_MODEL_ID = "FunAudioLLM/Fun-ASR-Nano-2512"
-DEFAULT_MODEL_URL = "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
-DEFAULT_LOCAL_DIR = Path("./models/FunAudioLLM/Fun-ASR-Nano-2512")
+DEFAULT_BACKEND = "funasr"
+DEFAULT_MODEL_ID_BY_BACKEND = {
+    "funasr": "FunAudioLLM/Fun-ASR-Nano-2512",
+    "qwen": "Qwen/Qwen3-ASR-1.7B",
+}
+DEFAULT_MODEL_URL_BY_BACKEND = {
+    "funasr": "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512",
+    "qwen": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
+}
+DEFAULT_LOCAL_DIR_BY_BACKEND = {
+    "funasr": Path("./models/FunAudioLLM/Fun-ASR-Nano-2512"),
+    "qwen": Path("./models/Qwen/Qwen3-ASR-1.7B"),
+}
 MODEL_CODE_NAME = "model.py"
 REMOTE_CODE_BASE = "https://raw.githubusercontent.com/FunAudioLLM/Fun-ASR/main"
 REMOTE_CODE_FILES = [
@@ -29,8 +41,43 @@ REMOTE_CODE_FILES = [
     "tools/utils.py",
 ]
 
+ENV_MODEL_NAME = os.environ.get("VOICEINPUT_ASR_MODEL", "").strip().lower()
+ENV_MODEL_ID = os.environ.get("VOICEINPUT_ASR_MODEL_ID", "").strip()
+ENV_BACKEND = os.environ.get("VOICEINPUT_ASR_BACKEND", "").strip().lower()
+ENV_SOURCE_URL = os.environ.get("VOICEINPUT_ASR_SOURCE_URL", "").strip()
+ENV_LOCAL_DIR = os.environ.get("VOICEINPUT_ASR_MODEL_DIR", "").strip()
 
-def has_required_model_files(local_dir: Path) -> bool:
+
+def normalize_backend_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"funasr", "fun"}:
+        return "funasr"
+    if normalized in {"qwen", "qwen3", "qwen-asr"}:
+        return "qwen"
+    return None
+
+
+def infer_backend_from_env() -> str:
+    if ENV_MODEL_ID:
+        return "qwen" if "qwen/qwen3-asr" in ENV_MODEL_ID.lower() else "funasr"
+
+    backend = normalize_backend_name(ENV_MODEL_NAME)
+    if backend:
+        return backend
+
+    backend = normalize_backend_name(ENV_BACKEND)
+    if backend:
+        return backend
+
+    return DEFAULT_BACKEND
+
+
+def has_required_model_files(local_dir: Path, backend: str) -> bool:
+    if backend == "qwen":
+        return local_dir.exists() and any(local_dir.iterdir())
+
     required_files = [
         local_dir / "config.yaml",
         local_dir / "model.pt",
@@ -110,11 +157,24 @@ def download_remote_code_files(local_dir: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="部署本地 Fun-ASR 模型")
-    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID, help="ModelScope 模型 ID")
+    parser = argparse.ArgumentParser(description="部署本地 ASR 模型")
+    parser.add_argument(
+        "--backend",
+        choices=sorted(DEFAULT_MODEL_ID_BY_BACKEND.keys()),
+        default=None,
+        help="选择 ASR 模型后端",
+    )
+    parser.add_argument(
+        "--model",
+        choices=sorted(DEFAULT_MODEL_ID_BY_BACKEND.keys()),
+        default=None,
+        help="选择 ASR 模型（backend 的别名）",
+    )
+    parser.add_argument("--model-id", default=None, help="模型 ID")
+    parser.add_argument("--source-url", default=None, help="模型来源页面 URL")
     parser.add_argument(
         "--local-dir",
-        default=str(DEFAULT_LOCAL_DIR),
+        default=None,
         help="模型存放目录",
     )
     parser.add_argument(
@@ -170,7 +230,40 @@ def detect_mps() -> bool:
 
 def main() -> int:
     args = parse_args()
-    local_dir = Path(args.local_dir)
+    if args.model and args.backend and args.model != args.backend:
+        print(
+            f"--backend={args.backend} 与 --model={args.model} 冲突，请保留一个",
+            file=sys.stderr,
+        )
+        return 2
+
+    cli_backend = args.model or args.backend
+    if cli_backend:
+        backend = cli_backend
+    else:
+        backend = infer_backend_from_env()
+
+    if args.model_id:
+        model_id = args.model_id
+    elif cli_backend is None and ENV_MODEL_ID:
+        model_id = ENV_MODEL_ID
+    else:
+        model_id = DEFAULT_MODEL_ID_BY_BACKEND[backend]
+
+    if args.source_url:
+        source_url = args.source_url
+    elif cli_backend is None and ENV_SOURCE_URL:
+        source_url = ENV_SOURCE_URL
+    else:
+        source_url = DEFAULT_MODEL_URL_BY_BACKEND[backend]
+
+    if args.local_dir:
+        local_dir = Path(args.local_dir)
+    elif cli_backend is None and ENV_LOCAL_DIR:
+        local_dir = Path(ENV_LOCAL_DIR)
+    else:
+        local_dir = Path(DEFAULT_LOCAL_DIR_BY_BACKEND[backend])
+
     has_nvidia = detect_nvidia_gpu()
     has_mps = detect_mps()
 
@@ -233,36 +326,55 @@ def main() -> int:
             return result.returncode
 
     if args.skip_existing and local_dir.exists():
-        if has_required_model_files(local_dir):
+        if has_required_model_files(local_dir, backend):
             print(f"模型已存在：{local_dir}")
             return 0
-        print("发现模型目录缺少远程代码文件，正在补齐...")
-        download_remote_code_files(local_dir)
-        if has_required_model_files(local_dir):
-            print(f"模型已存在：{local_dir}")
-            return 0
+        if backend == "funasr":
+            print("发现模型目录缺少远程代码文件，正在补齐...")
+            download_remote_code_files(local_dir)
+            if has_required_model_files(local_dir, backend):
+                print(f"模型已存在：{local_dir}")
+                return 0
 
-    try:
-        from modelscope import snapshot_download
-    except ImportError:
-        print(
-            "需要先安装 modelscope。可执行：uv pip install -r scripts/requirements-asr-base.txt",
-            file=sys.stderr,
-        )
-        return 1
+    if backend == "funasr":
+        try:
+            from modelscope import snapshot_download
+        except ImportError:
+            print(
+                "需要先安装 modelscope。可执行：uv pip install -r scripts/requirements-asr-base.txt",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            print(
+                "需要先安装 huggingface_hub。可执行：uv pip install -r scripts/requirements-asr-base.txt",
+                file=sys.stderr,
+            )
+            return 1
 
-    print(f"正在下载模型：{args.model_id}")
-    print(f"来源：{DEFAULT_MODEL_URL}")
+    print(f"正在下载模型：{model_id}")
+    print(f"来源：{source_url}")
+    print(f"后端：{backend}")
     print(f"目标目录：{local_dir}")
     print(f"部署提示设备：{target_device}")
 
-    downloaded = snapshot_download(
-        args.model_id,
-        revision=args.revision,
-        local_dir=str(local_dir),
-    )
-
-    download_remote_code_files(local_dir)
+    if backend == "funasr":
+        downloaded = snapshot_download(
+            model_id,
+            revision=args.revision,
+            local_dir=str(local_dir),
+        )
+        download_remote_code_files(local_dir)
+    else:
+        downloaded = snapshot_download(
+            repo_id=model_id,
+            revision=args.revision,
+            local_dir=str(local_dir),
+            local_dir_use_symlinks=False,
+        )
 
     print(f"下载完成：{downloaded}")
     return 0

@@ -25,8 +25,22 @@ fn local_transcriber_uses_local_model_config() {
         recorded[0].source_url,
         "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
     );
+    assert_eq!(recorded[0].model_id, "FunAudioLLM/Fun-ASR-Nano-2512");
     assert_eq!(recorded[0].device, "auto");
     assert_eq!(recorded[0].language, "中文");
+}
+
+#[test]
+fn qwen_config_uses_qwen_defaults() {
+    let config = FunAsrConfig::qwen3_asr_1_7b_default();
+
+    assert_eq!(config.model_id, "Qwen/Qwen3-ASR-1.7B");
+    assert_eq!(config.source_url, "https://huggingface.co/Qwen/Qwen3-ASR-1.7B");
+    assert_eq!(
+        config.model_dir,
+        std::path::PathBuf::from("./models/Qwen/Qwen3-ASR-1.7B")
+    );
+    assert!(config.is_qwen());
 }
 
 #[test]

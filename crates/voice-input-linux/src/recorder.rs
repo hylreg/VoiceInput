@@ -364,7 +364,7 @@ fn write_pcm_wav(samples: &[i16], sample_rate: u32) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(target_os = "linux"))]
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct LinuxMicAudioRecorder;
 
 #[cfg(not(target_os = "linux"))]
