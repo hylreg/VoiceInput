@@ -24,10 +24,10 @@
 
 现在 macOS crate 还带了一个 smoke binary，会读取本地音频文件并通过本地 Fun-ASR 模型转写：
 
-- `cargo run -p voice-input-macos -- --audio-file /path/to/audio.wav`
+- `cargo run -p voice-input-macos -- --audio-file testdata/smoke.wav`
 - 这个 smoke 路径建议使用 WAV/PCM 输入
-- 推荐命令是 `uv run -- cargo run -p voice-input-macos -- --audio-file /path/to/audio.wav`
-- 也可以用 `scripts/voiceinput.sh macos smoke --audio-file /path/to/audio.wav`
+- 推荐命令是 `uv run -- cargo run -p voice-input-macos -- --audio-file testdata/smoke.wav`
+- 也可以用 `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav`
 - 实时运行时已经支持热键开始/停止录音，并在结束后提交文本
 
 此外，仓库里还加了一个系统级 IME 入口：
@@ -115,7 +115,7 @@ Python 环境：
 ### 推荐部署步骤
 
 1. `scripts/voiceinput.sh bootstrap`
-2. 如果想在部署后直接验证，可以传入 `--audio-file /path/to/audio.wav`
+2. 如果想在部署后直接验证，可以传入 `--audio-file testdata/smoke.wav`
 3. 或者手动执行 `uv venv .venv`
 4. `uv pip install -r scripts/requirements-asr-base.txt`
 5. `uv pip install -r scripts/requirements-asr-runtime.txt`
@@ -161,9 +161,9 @@ Python 环境：
 
 ### Smoke 路径
 
-- `uv run -- cargo run -p voice-input-macos -- --audio-file /path/to/audio.wav`
-- 或者 `scripts/voiceinput.sh macos smoke --audio-file /path/to/audio.wav`
-- 或者直接 `scripts/voiceinput.sh bootstrap --audio-file /path/to/audio.wav`
+- `uv run -- cargo run -p voice-input-macos -- --audio-file testdata/smoke.wav`
+- 或者 `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav`
+- 或者直接 `scripts/voiceinput.sh bootstrap --audio-file testdata/smoke.wav`
 
 ## 推荐推进顺序
 
@@ -195,13 +195,13 @@ Ubuntu 20.04 上优先用 IBus 跑通最小闭环。
 然后可以先跑：
 
 ```bash
-cargo run -p voice-input-linux --features ibus -- --audio-file /path/to/audio.wav
+cargo run -p voice-input-linux --features ibus -- --audio-file testdata/smoke.wav
 ```
 
 或者：
 
 ```bash
-scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav
+scripts/voiceinput.sh linux smoke --audio-file testdata/smoke.wav
 ```
 
 常驻版可以这样启动：

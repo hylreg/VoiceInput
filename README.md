@@ -34,13 +34,13 @@
 - 用于开发和测试的 mock host 与转写管线
 - macOS host crate，保留 `InputMethodKit` 风格的桥接边界
 - macOS 本地语音输入管线，已接入 `LocalFunAsrTranscriber`
-- macOS smoke binary: `cargo run -p voice-input-macos -- --audio-file /path/to/audio.wav`
+- macOS smoke binary: `cargo run -p voice-input-macos -- --audio-file testdata/smoke.wav`
 - macOS 系统级 IME 入口: `cargo run -p voice-input-macos --bin voice-input-macos-ime`
 - macOS 常驻菜单栏 app: `cargo run -p voice-input-macos --bin voice-input-macos-app`
 - `voice-input-macos-ime` 负责系统级入口，默认不显示菜单栏图标，并优先使用 `InputMethodKit`
 - `voice-input-macos-app` 负责常驻菜单栏入口
 - 两个入口都会启动同一套实时运行时：按热键开始录音，再按一次停止并提交文本
-- 建议使用 WAV/PCM 音频做 smoke 测试
+- 建议使用 WAV/PCM 音频做 smoke 测试；仓库里已经提供了 `testdata/smoke.wav`
 - Linux host crate，拆分了 IBus/Fcitx5 后端与 IBus bridge 层
 - Linux IBus 路径绑定到 `ibus` crate + D-Bus 抽象，而不是 `glib`
 - IBus bridge 已使用真实 `ibus` crate 调用：`Bus`、`InputContext`、focus、surrounding text、reset、signal subscriptions
@@ -71,7 +71,7 @@
 5. 或者直接使用 `uv run`
 6. 也可以直接运行一键部署脚本：`scripts/voiceinput.sh bootstrap`
 7. 如果要切到 Qwen，可以传入 `--model qwen`，`--backend qwen` 也兼容
-8. 如果同时想跑 smoke，可以传入 `--audio-file /path/to/audio.wav`
+8. 如果同时想跑 smoke，可以传入 `--audio-file testdata/smoke.wav`
 9. 默认会使用阿里云 PyPI 镜像；如果要改源，可以先设置 `UV_DEFAULT_INDEX`
 10. 依赖已经拆成 `scripts/requirements-asr-base.txt` 和 `scripts/requirements-asr-runtime.txt`，`scripts/requirements-asr.txt` 只是组合入口
 11. 默认 ASR 配置来自 `config/voiceinput.env`，里面已经放了 FunASR / Qwen 两个模板；也可以用 `VOICEINPUT_CONFIG_FILE` 指向别的文件，命令行参数和显式环境变量仍然会覆盖它
@@ -79,10 +79,10 @@
 
 ## Smoke 流程
 
-1. `scripts/voiceinput.sh macos smoke --audio-file /path/to/audio.wav`
-2. 或者 `uv run -- cargo run -p voice-input-macos -- --audio-file /path/to/audio.wav`
+1. `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav`
+2. 或者 `uv run -- cargo run -p voice-input-macos -- --audio-file testdata/smoke.wav`
 3. Linux live app 可以用 `cargo run -p voice-input-linux --features ibus --bin voice-input-linux-app -- --backend ibus`
-4. Linux smoke 仍然可以用 `scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav`，需要切 Qwen 时可加 `--model qwen`
+4. Linux smoke 仍然可以用 `scripts/voiceinput.sh linux smoke --audio-file testdata/smoke.wav`，需要切 Qwen 时可加 `--model qwen`
 5. Linux 一键版可以用 `scripts/voiceinput.sh linux install`
 
 ## 模型部署
@@ -90,9 +90,9 @@
 1. `uv run -- python scripts/deploy_funasr_model.py --skip-existing`
 2. 或者先执行 `scripts/setup_python_env.sh`，再运行同样的命令
 3. 或者直接执行 `scripts/voiceinput.sh bootstrap`
-4. 一键部署并跑 smoke：`scripts/voiceinput.sh bootstrap --audio-file /path/to/audio.wav`
+4. 一键部署并跑 smoke：`scripts/voiceinput.sh bootstrap --audio-file testdata/smoke.wav`
 5. 一键部署会先安装 `requirements-asr-base.txt` 和 `requirements-asr-runtime.txt`，再下载模型，这样 Mac 上可以正确检测到 MPS
-6. 统一入口可以写成 `scripts/voiceinput.sh bootstrap --audio-file /path/to/audio.wav`
+6. 统一入口可以写成 `scripts/voiceinput.sh bootstrap --audio-file testdata/smoke.wav`
 
 ## macOS 系统级 IME
 
@@ -139,9 +139,9 @@
 2. 如果要让 Rust 侧录音后端也可用，再补 `libasound2-dev` 和 `portaudio19-dev`
 3. 如果要用 Linux 全局热键监听，再补 `libx11-dev`
 4. 先准备好 `.venv` 和本地 ASR 模型
-5. 运行 `scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav`
+5. 运行 `scripts/voiceinput.sh linux smoke --audio-file testdata/smoke.wav`
 6. 如果要切到 Qwen，可以加 `--model qwen`
-7. 或者直接运行 `cargo run -p voice-input-linux --features ibus -- --audio-file /path/to/audio.wav`
+7. 或者直接运行 `cargo run -p voice-input-linux --features ibus -- --audio-file testdata/smoke.wav`
 8. 或者启动常驻版：`cargo run -p voice-input-linux --features ibus --bin voice-input-linux-app -- --backend ibus`
 9. 常驻版会在托盘显示状态项，热键开始/停止录音，托盘菜单里也有停止和退出
 10. 或者直接用一键脚本：`scripts/voiceinput.sh linux install`
