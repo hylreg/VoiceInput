@@ -10,6 +10,8 @@ use voice_input_core::{Result, VoiceInputError};
 pub enum MacImeEvent {
     StartComposition,
     UpdatePreedit(String),
+    ShowRecordingIndicator,
+    ClearRecordingIndicator,
     CommitText(String),
     CancelComposition,
     EndComposition,
@@ -20,6 +22,8 @@ impl std::fmt::Display for MacImeEvent {
         match self {
             Self::StartComposition => write!(f, "开始输入"),
             Self::UpdatePreedit(text) => write!(f, "更新预编辑：{text}"),
+            Self::ShowRecordingIndicator => write!(f, "显示录音标记"),
+            Self::ClearRecordingIndicator => write!(f, "清除录音标记"),
             Self::CommitText(text) => write!(f, "提交文本：{text}"),
             Self::CancelComposition => write!(f, "取消输入"),
             Self::EndComposition => write!(f, "结束输入"),
@@ -30,6 +34,8 @@ impl std::fmt::Display for MacImeEvent {
 pub trait MacImeBridge {
     fn start_composition(&self) -> Result<()>;
     fn update_preedit(&self, text: &str) -> Result<()>;
+    fn show_recording_indicator(&self) -> Result<()>;
+    fn clear_recording_indicator(&self) -> Result<()>;
     fn commit_text(&self, text: &str) -> Result<()>;
     fn cancel_composition(&self) -> Result<()>;
     fn end_composition(&self) -> Result<()>;
@@ -45,6 +51,18 @@ impl MacImeBridge for UnwiredMacImeBridge {
     }
 
     fn update_preedit(&self, _text: &str) -> Result<()> {
+        Err(VoiceInputError::Injection(
+            "macOS 注入桥接尚未接入".to_string(),
+        ))
+    }
+
+    fn show_recording_indicator(&self) -> Result<()> {
+        Err(VoiceInputError::Injection(
+            "macOS 注入桥接尚未接入".to_string(),
+        ))
+    }
+
+    fn clear_recording_indicator(&self) -> Result<()> {
         Err(VoiceInputError::Injection(
             "macOS 注入桥接尚未接入".to_string(),
         ))
@@ -70,12 +88,16 @@ impl MacImeBridge for UnwiredMacImeBridge {
 }
 
 #[cfg(target_os = "macos")]
-pub struct ClipboardMacImeBridge;
+pub struct ClipboardMacImeBridge {
+    recording_indicator_len: Arc<Mutex<usize>>,
+}
 
 #[cfg(target_os = "macos")]
 impl Default for ClipboardMacImeBridge {
     fn default() -> Self {
-        Self
+        Self {
+            recording_indicator_len: Arc::new(Mutex::new(0)),
+        }
     }
 }
 
@@ -86,6 +108,50 @@ impl MacImeBridge for ClipboardMacImeBridge {
     }
 
     fn update_preedit(&self, _text: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn show_recording_indicator(&self) -> Result<()> {
+        let mut guard = self.recording_indicator_len.lock().map_err(|_| {
+            VoiceInputError::Injection("锁定 macOS 录音标记状态失败".to_string())
+        })?;
+        if *guard > 0 {
+            return Ok(());
+        }
+
+        if accessibility_commit_text(RECORDING_MARKER)? {
+            *guard = RECORDING_MARKER.chars().count();
+            return Ok(());
+        }
+
+        if unicode_key_event_commit_text(RECORDING_MARKER)? {
+            *guard = RECORDING_MARKER.chars().count();
+            return Ok(());
+        }
+
+        paste_text_and_restore_clipboard(RECORDING_MARKER)?;
+        *guard = RECORDING_MARKER.chars().count();
+        Ok(())
+    }
+
+    fn clear_recording_indicator(&self) -> Result<()> {
+        let marker_len = {
+            let guard = self.recording_indicator_len.lock().map_err(|_| {
+                VoiceInputError::Injection("锁定 macOS 录音标记状态失败".to_string())
+            })?;
+            *guard
+        };
+
+        if marker_len == 0 {
+            return Ok(());
+        }
+
+        send_backspace_events(marker_len)?;
+
+        let mut guard = self.recording_indicator_len.lock().map_err(|_| {
+            VoiceInputError::Injection("锁定 macOS 录音标记状态失败".to_string())
+        })?;
+        *guard = 0;
         Ok(())
     }
 
@@ -129,6 +195,18 @@ impl MacImeBridge for ClipboardMacImeBridge {
     }
 
     fn update_preedit(&self, _text: &str) -> Result<()> {
+        Err(VoiceInputError::Injection(
+            "clipboard 提交只支持 macOS".to_string(),
+        ))
+    }
+
+    fn show_recording_indicator(&self) -> Result<()> {
+        Err(VoiceInputError::Injection(
+            "clipboard 提交只支持 macOS".to_string(),
+        ))
+    }
+
+    fn clear_recording_indicator(&self) -> Result<()> {
         Err(VoiceInputError::Injection(
             "clipboard 提交只支持 macOS".to_string(),
         ))
@@ -188,6 +266,34 @@ pub(crate) fn paste_text_and_restore_clipboard(text: &str) -> Result<()> {
             let _: i64 = pasteboard.clearContents();
             let _: bool = pasteboard.setString_forType(previous_text, NSPasteboardTypeString);
         }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+const RECORDING_MARKER: &str = "●";
+
+#[cfg(target_os = "macos")]
+fn send_backspace_events(count: usize) -> Result<()> {
+    use core_graphics::event::{CGEvent, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    if count == 0 {
+        return Ok(());
+    }
+
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+        .map_err(|_| VoiceInputError::Injection("创建键盘事件源失败".to_string()))?;
+
+    for _ in 0..count {
+        let key_down = CGEvent::new_keyboard_event(source.clone(), 0x33, true)
+            .map_err(|_| VoiceInputError::Injection("创建退格键事件失败".to_string()))?;
+        key_down.post(CGEventTapLocation::HID);
+
+        let key_up = CGEvent::new_keyboard_event(source.clone(), 0x33, false)
+            .map_err(|_| VoiceInputError::Injection("创建退格键事件失败".to_string()))?;
+        key_up.post(CGEventTapLocation::HID);
     }
 
     Ok(())
@@ -454,6 +560,14 @@ impl MacImeBridge for MockMacImeBridge {
 
     fn update_preedit(&self, text: &str) -> Result<()> {
         self.push(MacImeEvent::UpdatePreedit(text.to_string()))
+    }
+
+    fn show_recording_indicator(&self) -> Result<()> {
+        self.push(MacImeEvent::ShowRecordingIndicator)
+    }
+
+    fn clear_recording_indicator(&self) -> Result<()> {
+        self.push(MacImeEvent::ClearRecordingIndicator)
     }
 
     fn commit_text(&self, text: &str) -> Result<()> {

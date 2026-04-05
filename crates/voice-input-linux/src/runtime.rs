@@ -34,7 +34,7 @@ mod linux_runtime {
     impl Default for LinuxLiveAppConfig {
         fn default() -> Self {
             let mut app = AppConfig::default();
-            app.activation_hotkey = "DoubleCtrlStrict".to_string();
+            app.activation_hotkey = "Ctrl+Shift+Space".to_string();
 
             Self {
                 app,
@@ -72,7 +72,7 @@ mod linux_runtime {
         }
     }
 
-    const RECORDING_MARKER: &str = "[REC]";
+    const RECORDING_MARKER: &str = "●";
 
     fn type_recording_marker() -> Result<()> {
         let status = Command::new("xdotool")

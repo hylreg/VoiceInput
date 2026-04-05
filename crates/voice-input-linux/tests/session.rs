@@ -3,8 +3,8 @@ use voice_input_core::InputMethodHost;
 use voice_input_core::{AppConfig, MockAudioRecorder, MockHotkeyManager};
 use voice_input_linux::{
     IbusEngineEvent, LinuxBackendKind, LinuxCompositionSession, LinuxHostConfig,
-    LinuxInputMethodHost, LinuxLocalVoiceInput, LinuxLocalVoiceInputConfig, MockIbusBridge,
-    MockLinuxBackend,
+    LinuxInputMethodHost, LinuxLiveAppConfig, LinuxLocalVoiceInput, LinuxLocalVoiceInputConfig,
+    MockIbusBridge, MockLinuxBackend,
 };
 
 #[test]
@@ -27,6 +27,13 @@ fn host_uses_configured_backend() {
     });
 
     assert_eq!(host.backend_kind(), LinuxBackendKind::IBus);
+}
+
+#[test]
+fn live_app_defaults_to_mac_like_hotkey() {
+    let config = LinuxLiveAppConfig::default();
+
+    assert_eq!(config.app.activation_hotkey, "Ctrl+Shift+Space");
 }
 
 #[test]

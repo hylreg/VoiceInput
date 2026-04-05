@@ -54,6 +54,14 @@ impl InputMethodHost for MacInputMethodHost {
         Ok(())
     }
 
+    fn show_recording_indicator(&self) -> Result<()> {
+        self.bridge.show_recording_indicator()
+    }
+
+    fn clear_recording_indicator(&self) -> Result<()> {
+        self.bridge.clear_recording_indicator()
+    }
+
     fn commit_text(&self, text: &str) -> Result<()> {
         self.bridge.commit_text(text)?;
         self.session.borrow_mut().inner.commit(text);

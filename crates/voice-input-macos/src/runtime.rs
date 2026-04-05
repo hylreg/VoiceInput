@@ -2,6 +2,8 @@
 
 #[cfg(target_os = "macos")]
 mod mac_runtime {
+    use std::fs::{File, OpenOptions};
+    use std::io::Write;
     use std::os::raw::c_void;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -23,6 +25,7 @@ mod mac_runtime {
         CGEventType, EventField, KeyCode,
     };
     use objc::{msg_send, sel, sel_impl};
+    use fs2::FileExt;
 
     use crate::bridge::{ClipboardMacImeBridge, MacImeBridge};
     use crate::host::{MacHostConfig, MacInputMethodHost};
@@ -60,6 +63,49 @@ mod mac_runtime {
     struct MainLoopContext {
         controller: AppController,
         state: Arc<RuntimeState>,
+    }
+
+    struct SingleInstanceGuard {
+        _lock_file: File,
+    }
+
+    impl SingleInstanceGuard {
+        fn acquire() -> Result<Option<Self>> {
+            let lock_path = std::env::temp_dir().join("voiceinput-macos.lock");
+            let lock_file = OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .open(&lock_path)
+                .map_err(|e| VoiceInputError::Injection(format!(
+                    "创建 macOS 单实例锁失败 {}：{e}",
+                    lock_path.display()
+                )))?;
+
+            match lock_file.try_lock_exclusive() {
+                Ok(()) => {
+                    let mut lock_file_for_pid = lock_file;
+                    lock_file_for_pid
+                        .set_len(0)
+                        .map_err(|e| VoiceInputError::Injection(format!(
+                            "清空 macOS 单实例锁失败：{e}"
+                        )))?;
+                    lock_file_for_pid
+                        .write_all(format!("pid={}\n", std::process::id()).as_bytes())
+                        .map_err(|e| VoiceInputError::Injection(format!(
+                            "写入 macOS 单实例锁失败：{e}"
+                        )))?;
+                    Ok(Some(Self {
+                        _lock_file: lock_file_for_pid,
+                    }))
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+                Err(err) => Err(VoiceInputError::Injection(format!(
+                    "获取 macOS 单实例锁失败 {}：{err}",
+                    lock_path.display()
+                ))),
+            }
+        }
     }
 
     #[derive(Clone, Copy)]
@@ -188,6 +234,14 @@ mod mac_runtime {
 
     pub fn run_live_app(config: MacLiveAppConfig) -> Result<()> {
         unsafe {
+            let _instance_guard = match SingleInstanceGuard::acquire()? {
+                Some(guard) => guard,
+                None => {
+                    println!("检测到已有 VoiceInput macOS 实例正在运行，跳过重复启动");
+                    return Ok(());
+                }
+            };
+
             let pool = NSAutoreleasePool::new(nil);
             let app = NSApp();
             app.setActivationPolicy_(NSApplicationActivationPolicyAccessory);

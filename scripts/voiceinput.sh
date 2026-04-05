@@ -588,8 +588,12 @@ EOF
 
   cd "$REPO_ROOT"
 
-  echo "正在创建或更新 Python 虚拟环境：.venv"
-  UV_VENV_CLEAR=1 uv venv .venv --python "$(command -v python3.12)"
+  if [[ -d ".venv" ]]; then
+    echo "正在复用 Python 虚拟环境：.venv"
+  else
+    echo "正在创建 Python 虚拟环境：.venv"
+    uv venv .venv --python "$(command -v python3.12)"
+  fi
 
   echo "正在安装模型下载依赖"
   uv pip install -r scripts/requirements-asr-base.txt

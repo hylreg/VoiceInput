@@ -20,9 +20,9 @@
 - 把转写结果注入到当前前台应用
 - 在权限不足或注入失败时给出清晰提示
 
-仓库里现在已经有一个 macOS host crate，用来隔离这层桥接。它现在已经能跑出一条可用闭环：全局热键触发、麦克风录音、本地 ASR 转写，然后把文本送到当前前台应用。
+仓库里已经有一个 macOS host crate。
 
-现在 macOS crate 还带了一个 smoke 路径，会读取本地音频文件并通过本地模型转写：
+macOS crate 还带了一个 smoke 路径：
 
 - 这个 smoke 路径建议使用 WAV/PCM 输入
 - 用 `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav` 触发
@@ -64,7 +64,7 @@ Python 环境：
 - 把 preedit 文本推给 engine context
 - 把最终文本提交到当前焦点窗口
 
-仓库里现在已经有 Linux host crate，并把后端拆成了 IBus / Fcitx5 两层。剩下的工作是把后端 trait 绑定到真实的 IBus / Fcitx5 API。
+仓库里已经有 Linux host crate，并把后端拆成了 IBus / Fcitx5 两层。
 
 ### IBus 依赖选择
 
@@ -97,18 +97,18 @@ Python 环境：
 
 - ModelScope 模型页：`https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512`
 - 默认本地缓存目录：`./models/Qwen/Qwen3-ASR-0.6B`
-- 也兼容 `FunAudioLLM/Fun-ASR-Nano-2512` 和 `Qwen/Qwen3-ASR-1.7B`，缓存分别是 `./models/FunAudioLLM/Fun-ASR-Nano-2512` 和 `./models/Qwen/Qwen3-ASR-1.7B`
-- 仓库级配置模板是 [`config/voiceinput.env`](../config/voiceinput.env)，当前默认写入的是 Qwen 0.6B；选模型时优先用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>`
+- 也兼容 `FunAudioLLM/Fun-ASR-Nano-2512` 和 `Qwen/Qwen3-ASR-1.7B`
+- 仓库级配置模板是 [`config/voiceinput.env`](../config/voiceinput.env)
 - 统一入口是 [`scripts/voiceinput.sh`](../scripts/voiceinput.sh)
-- `voice-input-asr` 里的 Python runner 会根据 `FunAsrConfig` 的 `backend` 选择 FunASR 或 Qwen 路径；FunASR 会使用 `remote_code`、`device`、`language` 和 `itn`，Qwen 会优先使用 `model_id`、`device` 和 `language`
-- 用 [`scripts/deploy_funasr_model.py`](../scripts/deploy_funasr_model.py) 把模型下载到本地缓存目录，`--backend qwen` 会下载 `Qwen/Qwen3-ASR-1.7B`，`--model-id Qwen/Qwen3-ASR-0.6B` 会落到 0.6B 缓存目录
+- `voice-input-asr` 里的 Python runner 会根据 `FunAsrConfig` 的 `backend` 选择 FunASR 或 Qwen 路径
+- 用 [`scripts/deploy_funasr_model.py`](../scripts/deploy_funasr_model.py) 下载模型
 - Python 依赖见 [`scripts/requirements-asr-base.txt`](../scripts/requirements-asr-base.txt) 和 [`scripts/requirements-asr-runtime.txt`](../scripts/requirements-asr-runtime.txt)
 
 ### 推荐部署步骤
 
 1. `scripts/voiceinput.sh bootstrap`
 2. 如果想在部署后直接验证，可以传入 `--audio-file testdata/smoke.wav`
-3. `scripts/voiceinput.sh bootstrap` 内部会先装 base 和 runtime，再部署模型，这样 Mac 上能正确检测 MPS
+3. `scripts/voiceinput.sh bootstrap` 会先装 base 和 runtime，再部署模型
 4. 需要切模型时可以加 `--model qwen` 或 `--model qwen-0.6b`
 
 ### macOS 常驻 app
@@ -136,7 +136,7 @@ Python 环境：
 ### Smoke 路径
 
 - `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav`
-- 也可以直接 `scripts/voiceinput.sh bootstrap --audio-file testdata/smoke.wav`
+- `scripts/voiceinput.sh bootstrap --audio-file testdata/smoke.wav`
 
 ## 推荐推进顺序
 
@@ -165,11 +165,12 @@ Ubuntu 20.04 上优先用 IBus 跑通最小闭环。
 - `libasound2-dev`
 - `portaudio19-dev`
 
-然后可以先跑 `scripts/voiceinput.sh linux smoke --audio-file testdata/smoke.wav`。
+先跑 `scripts/voiceinput.sh linux smoke --audio-file testdata/smoke.wav`。
 
-常驻版可以直接用 `scripts/voiceinput.sh linux install` 启动。启动后会常驻在托盘里，菜单提供状态、停止当前录音和退出；平时还是用全局热键开始录音。
+常驻版可以直接用 `scripts/voiceinput.sh linux install` 启动。
 
-默认会先跑 Linux bootstrap，自动安装缺失的 Ubuntu 20.04 常用依赖，然后启动常驻托盘版；传入 `--audio-file` 时会改成 smoke 模式。
-如果要在安装时切到 Qwen，可以传入 `--model qwen`；这个参数会原样透传给 `scripts/voiceinput.sh bootstrap`。
+默认会先跑 Linux bootstrap 并启动常驻托盘版；传入 `--audio-file` 时会改成 smoke 模式。切模型时可以传入 `--model qwen`。
 
-当前 Linux 目标是先把转写结果通过 IBus 宿主送进当前焦点窗口。Fcitx5 还保留为后续单独接 native bindings 的路线。
+Linux 默认热键和 macOS 一样，都是 `Ctrl+Shift+Space`。
+
+当前 Linux 目标是先把转写结果通过 IBus 宿主送进当前焦点窗口。

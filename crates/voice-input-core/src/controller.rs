@@ -29,8 +29,12 @@ impl AppController {
 
     pub fn process_once(&self) -> Result<String> {
         self.ime.start_composition()?;
+        let mut recording_indicator_cleared = false;
         let outcome = (|| {
+            self.ime.show_recording_indicator()?;
             let audio = self.recorder.record_once()?;
+            self.ime.clear_recording_indicator()?;
+            recording_indicator_cleared = true;
             let transcript = self.transcriber.transcribe(&audio)?;
 
             for partial in &transcript.partials {
@@ -47,6 +51,9 @@ impl AppController {
                 Ok(text)
             }
             Err(err) => {
+                if !recording_indicator_cleared {
+                    let _ = self.ime.clear_recording_indicator();
+                }
                 let _ = self.ime.cancel_composition();
                 let _ = self.ime.end_composition();
                 Err(err)

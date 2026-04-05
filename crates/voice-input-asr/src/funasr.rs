@@ -603,6 +603,13 @@ impl FunAsrRunner for PythonFunAsrRunner {
             .write_all(&request.audio_bytes)
             .map_err(|e| VoiceInputError::Transcription(format!("写入临时音频文件失败：{e}")))?;
 
+        if let Some(worker) = &self.worker {
+            let mut worker = worker.lock().map_err(|_| {
+                VoiceInputError::Transcription("锁定 ASR worker 失败".to_string())
+            })?;
+            return worker.transcribe(audio_file.path(), &request);
+        }
+
         if request.config.is_qwen() {
             let qwen_language = request
                 .config
@@ -610,6 +617,7 @@ impl FunAsrRunner for PythonFunAsrRunner {
                 .unwrap_or_else(|| request.config.language.clone());
             let output = if self.python_bin == "uv" {
                 Command::new(&self.python_bin)
+                    .env("TRANSFORMERS_VERBOSITY", "error")
                     .arg("run")
                     .arg("--")
                     .arg("python")
@@ -627,6 +635,7 @@ impl FunAsrRunner for PythonFunAsrRunner {
                     })?
             } else {
                 Command::new(&self.python_bin)
+                    .env("TRANSFORMERS_VERBOSITY", "error")
                     .arg("-c")
                     .arg(PYTHON_QWEN_SCRIPT)
                     .arg(&request.config.model_dir)
@@ -652,13 +661,6 @@ impl FunAsrRunner for PythonFunAsrRunner {
                 VoiceInputError::Transcription(format!("Qwen ASR 输出不是有效的 UTF-8：{e}"))
             })?;
             return Ok(text.trim().to_string());
-        }
-
-        if let Some(worker) = &self.worker {
-            let mut worker = worker.lock().map_err(|_| {
-                VoiceInputError::Transcription("锁定 ASR worker 失败".to_string())
-            })?;
-            return worker.transcribe(audio_file.path(), &request);
         }
 
         let hotwords_json = serde_json_like_array(&request.config.hotwords);
@@ -1127,6 +1129,11 @@ fn wav_bytes_to_pcm16(audio_bytes: &[u8]) -> Result<(Vec<i16>, u32)> {
 #[cfg(test)]
 mod tests {
     use super::resample_pcm16;
+    use super::{FunAsrRequest, PythonFunAsrRunner, PythonFunAsrWorker};
+    use crate::runner::FunAsrRunner;
+    use std::io::BufReader;
+    use std::process::{Command, Stdio};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn resample_pcm16_keeps_matching_rate_unchanged() {
@@ -1141,6 +1148,70 @@ mod tests {
         assert_eq!(resampled.len(), 4);
         assert_eq!(resampled.first().copied(), Some(0));
         assert_eq!(resampled.last().copied(), Some(1000));
+    }
+
+    #[test]
+    fn qwen_transcribe_prefers_reused_worker_when_available() {
+        let worker = spawn_test_worker();
+        let runner = PythonFunAsrRunner {
+            python_bin: "python3".to_string(),
+            worker: Some(Arc::new(Mutex::new(worker))),
+        };
+
+        let transcript = runner
+            .transcribe(FunAsrRequest {
+                audio_bytes: b"fake wav bytes".to_vec(),
+                config: crate::config::FunAsrConfig::qwen3_asr_0_6b_default(),
+            })
+            .expect("worker-backed qwen transcription should succeed");
+
+        assert_eq!(transcript, "worker-ok");
+    }
+
+    fn spawn_test_worker() -> PythonFunAsrWorker {
+        let script = r#"
+import json
+import sys
+
+print(json.dumps({"ready": True}), flush=True)
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    if line == "__quit__":
+        break
+    json.loads(line)
+    print(json.dumps({"text": "worker-ok"}), flush=True)
+    break
+"#;
+
+        let mut child = Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn test worker");
+
+        let stdin = child.stdin.take().expect("test worker stdin");
+        let stdout = child.stdout.take().expect("test worker stdout");
+        let mut stdout = BufReader::new(stdout);
+
+        let mut ready_line = String::new();
+        let read = std::io::BufRead::read_line(&mut stdout, &mut ready_line)
+            .expect("read worker ready line");
+        assert!(read > 0, "test worker did not report ready");
+
+        let ready = serde_json::from_str::<serde_json::Value>(ready_line.trim())
+            .expect("parse worker ready line");
+        assert_eq!(ready.get("ready").and_then(|value| value.as_bool()), Some(true));
+
+        PythonFunAsrWorker {
+            child,
+            stdin,
+            stdout,
+        }
     }
 }
 

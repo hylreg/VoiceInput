@@ -377,6 +377,12 @@ mod tests {
     }
 
     #[test]
+    fn parses_mac_like_default_hotkey_for_linux_runtime() {
+        let spec = LinuxHotkeySpec::parse("Ctrl+Shift+Space").expect("parse hotkey");
+        assert!(spec.matches(&[Keycode::Space, Keycode::LControl, Keycode::LShift]));
+    }
+
+    #[test]
     fn parses_double_ctrl_hotkey() {
         let spec = LinuxHotkeySpec::parse("DoubleCtrl").expect("parse hotkey");
         assert!(spec.matches(&[Keycode::LControl]));

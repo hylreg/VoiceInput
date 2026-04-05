@@ -21,6 +21,12 @@ pub trait TextInjector {
 pub trait InputMethodHost {
     fn start_composition(&self) -> Result<()>;
     fn update_preedit(&self, text: &str) -> Result<()>;
+    fn show_recording_indicator(&self) -> Result<()> {
+        Ok(())
+    }
+    fn clear_recording_indicator(&self) -> Result<()> {
+        Ok(())
+    }
     fn commit_text(&self, text: &str) -> Result<()>;
     fn cancel_composition(&self) -> Result<()>;
     fn end_composition(&self) -> Result<()>;
@@ -93,6 +99,14 @@ impl InputMethodHost for MockInputMethodHost {
 
     fn update_preedit(&self, text: &str) -> Result<()> {
         self.push(format!("更新预编辑：{text}"))
+    }
+
+    fn show_recording_indicator(&self) -> Result<()> {
+        self.push("显示录音标记")
+    }
+
+    fn clear_recording_indicator(&self) -> Result<()> {
+        self.push("清除录音标记")
     }
 
     fn commit_text(&self, text: &str) -> Result<()> {

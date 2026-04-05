@@ -34,6 +34,8 @@ fn demo_pipeline_drives_ime_composition_events() {
         ime.events(),
         vec![
             "开始输入",
+            "显示录音标记",
+            "清除录音标记",
             "更新预编辑：你好",
             "更新预编辑：来自语音",
             "更新预编辑：来自语音输入",
@@ -69,5 +71,8 @@ fn demo_pipeline_cancels_composition_on_failure() {
         err,
         voice_input_core::VoiceInputError::Transcription(_)
     ));
-    assert_eq!(ime.events(), vec!["开始输入", "取消输入", "结束输入"]);
+    assert_eq!(
+        ime.events(),
+        vec!["开始输入", "显示录音标记", "清除录音标记", "取消输入", "结束输入"]
+    );
 }

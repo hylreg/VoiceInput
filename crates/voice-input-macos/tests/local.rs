@@ -32,6 +32,8 @@ fn local_mac_pipeline_uses_funasr_and_drives_ime_events() {
         bridge_for_assertions.events(),
         vec![
             MacImeEvent::StartComposition,
+            MacImeEvent::ShowRecordingIndicator,
+            MacImeEvent::ClearRecordingIndicator,
             MacImeEvent::UpdatePreedit("本地语音输入".to_string()),
             MacImeEvent::CommitText("本地语音输入".to_string()),
             MacImeEvent::EndComposition,
