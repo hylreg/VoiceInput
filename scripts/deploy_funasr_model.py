@@ -2,9 +2,8 @@
 """
 Download a supported local ASR model into the cache dir.
 
-FunASR models are fetched from ModelScope and Qwen/Qwen3-ASR-1.7B is fetched
-from Hugging Face. The local cache keeps the runtime offline-friendly after the
-first download.
+FunASR and Qwen/Qwen3-ASR-1.7B are fetched from ModelScope. The local cache
+keeps the runtime offline-friendly after the first download.
 """
 
 from __future__ import annotations
@@ -26,12 +25,17 @@ DEFAULT_MODEL_ID_BY_BACKEND = {
 }
 DEFAULT_MODEL_URL_BY_BACKEND = {
     "funasr": "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512",
-    "qwen": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
+    "qwen": "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR",
 }
 DEFAULT_LOCAL_DIR_BY_BACKEND = {
     "funasr": Path("./models/FunAudioLLM/Fun-ASR-Nano-2512"),
     "qwen": Path("./models/Qwen/Qwen3-ASR-1.7B"),
 }
+DEFAULT_REVISION_BY_BACKEND = {
+    "funasr": "master",
+    "qwen": None,
+}
+QWEN_READY_MARKER = ".voiceinput_qwen_ready"
 MODEL_CODE_NAME = "model.py"
 REMOTE_CODE_BASE = "https://raw.githubusercontent.com/FunAudioLLM/Fun-ASR/main"
 REMOTE_CODE_FILES = [
@@ -76,7 +80,7 @@ def infer_backend_from_env() -> str:
 
 def has_required_model_files(local_dir: Path, backend: str) -> bool:
     if backend == "qwen":
-        return local_dir.exists() and any(local_dir.iterdir())
+        return local_dir.exists() and (local_dir / QWEN_READY_MARKER).exists()
 
     required_files = [
         local_dir / "config.yaml",
@@ -179,8 +183,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--revision",
-        default="master",
-        help="要下载的模型版本",
+        default=None,
+        help="要下载的模型版本；不传则使用后端默认值",
     )
     parser.add_argument(
         "--skip-existing",
@@ -228,6 +232,10 @@ def detect_mps() -> bool:
     return bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
 
 
+def default_revision_for_backend(backend: str) -> str | None:
+    return DEFAULT_REVISION_BY_BACKEND.get(backend, "main")
+
+
 def main() -> int:
     args = parse_args()
     if args.model and args.backend and args.model != args.backend:
@@ -242,6 +250,8 @@ def main() -> int:
         backend = cli_backend
     else:
         backend = infer_backend_from_env()
+
+    revision = args.revision or default_revision_for_backend(backend)
 
     if args.model_id:
         model_id = args.model_id
@@ -347,10 +357,10 @@ def main() -> int:
             return 1
     else:
         try:
-            from huggingface_hub import snapshot_download
+            from modelscope import snapshot_download
         except ImportError:
             print(
-                "需要先安装 huggingface_hub。可执行：uv pip install -r scripts/requirements-asr-base.txt",
+                "需要先安装 modelscope。可执行：uv pip install -r scripts/requirements-asr-base.txt",
                 file=sys.stderr,
             )
             return 1
@@ -360,21 +370,21 @@ def main() -> int:
     print(f"后端：{backend}")
     print(f"目标目录：{local_dir}")
     print(f"部署提示设备：{target_device}")
+    print(f"使用 revision：{revision or '(default)'}")
 
     if backend == "funasr":
-        downloaded = snapshot_download(
-            model_id,
-            revision=args.revision,
-            local_dir=str(local_dir),
-        )
+        snapshot_kwargs = {"local_dir": str(local_dir)}
+        if revision:
+            snapshot_kwargs["revision"] = revision
+        downloaded = snapshot_download(model_id, **snapshot_kwargs)
         download_remote_code_files(local_dir)
     else:
-        downloaded = snapshot_download(
-            repo_id=model_id,
-            revision=args.revision,
-            local_dir=str(local_dir),
-            local_dir_use_symlinks=False,
-        )
+        snapshot_kwargs = {"local_dir": str(local_dir)}
+        if revision:
+            snapshot_kwargs["revision"] = revision
+        downloaded = snapshot_download(model_id, **snapshot_kwargs)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        (local_dir / QWEN_READY_MARKER).write_text("ok\n", encoding="utf-8")
 
     print(f"下载完成：{downloaded}")
     return 0

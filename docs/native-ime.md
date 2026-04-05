@@ -105,7 +105,7 @@ Python 环境：
 - ModelScope 模型页：`https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512`
 - 默认本地缓存目录：`./models/FunAudioLLM/Fun-ASR-Nano-2512`
 - 也兼容 Qwen 模型：`Qwen/Qwen3-ASR-1.7B`，缓存到 `./models/Qwen/Qwen3-ASR-1.7B`
-- 仓库级默认配置文件是 [`config/voiceinput.env`](../config/voiceinput.env)，里面放了 FunASR 和 Qwen 两个可切换模板；默认值会先从这里读取，如果要换文件，可以设置 `VOICEINPUT_CONFIG_FILE`；命令行参数和显式环境变量仍然可以覆盖
+- 仓库级配置模板是 [`config/voiceinput.env`](../config/voiceinput.env)，里面放了 FunASR 和 Qwen 两个可切换模板；它本身不再固定默认模型。真要选模型时，优先用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen>`
 - 统一入口是 [`scripts/voiceinput.sh`](../scripts/voiceinput.sh)，比如 `scripts/voiceinput.sh bootstrap`、`scripts/voiceinput.sh macos install`
 - 旧脚本现在主要是兼容壳，方便你继续使用原来的命令名
 - `voice-input-asr` 里的 Python runner 会根据 `FunAsrConfig` 的 `backend` 选择 FunASR 或 Qwen 路径；FunASR 会使用 `remote_code`、`device`、`language` 和 `itn`，Qwen 会优先使用 `model_id`、`device` 和 `language`

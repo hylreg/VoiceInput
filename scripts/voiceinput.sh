@@ -166,6 +166,174 @@ voiceinput_ensure_linux_dev_deps() {
   DEBIAN_FRONTEND=noninteractive "${apt_cmd[@]}" install -y "${missing_packages[@]}"
 }
 
+voiceinput_normalize_model_choice() {
+  local choice="${1:-}"
+  choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+
+  case "$choice" in
+    funasr|fun)
+      printf '%s\n' "funasr"
+      ;;
+    qwen|qwen3|qwen-asr)
+      printf '%s\n' "qwen"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+voiceinput_config_file_path() {
+  printf '%s\n' "${VOICEINPUT_CONFIG_FILE:-$REPO_ROOT/config/voiceinput.env}"
+}
+
+voiceinput_write_model_config() {
+  local model="$1"
+  local config_file="${2:-$(voiceinput_config_file_path)}"
+  local normalized_model
+  normalized_model="$(voiceinput_normalize_model_choice "$model")" || return 1
+
+  local tmp_file
+  tmp_file="$(mktemp "${config_file}.XXXXXX")"
+
+  case "$normalized_model" in
+    funasr)
+      cat >"$tmp_file" <<'EOF'
+# VoiceInput shared configuration template.
+# Shell scripts source this file before deploying models or launching runtime.
+#
+# Use `scripts/voiceinput.sh model qwen` or `scripts/voiceinput.sh model funasr`
+# to rewrite this file with a selected default model.
+# Command-line arguments and explicit environment variables still override it.
+#
+# Keep one preset block uncommented below if you want a local default.
+
+## -------------------------------------------------------------------
+## FunASR preset
+## -------------------------------------------------------------------
+export VOICEINPUT_ASR_MODEL="funasr"
+export VOICEINPUT_ASR_BACKEND="funasr"
+export VOICEINPUT_ASR_MODEL_ID="FunAudioLLM/Fun-ASR-Nano-2512"
+export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
+export VOICEINPUT_ASR_MODEL_DIR="./models/FunAudioLLM/Fun-ASR-Nano-2512"
+export VOICEINPUT_ASR_REMOTE_CODE="./models/FunAudioLLM/Fun-ASR-Nano-2512/model.py"
+export VOICEINPUT_ASR_DEVICE="auto"
+export VOICEINPUT_ASR_LANGUAGE="中文"
+export VOICEINPUT_ASR_ITN="true"
+export VOICEINPUT_ASR_HOTWORDS=""
+
+## -------------------------------------------------------------------
+## Qwen preset
+## -------------------------------------------------------------------
+# export VOICEINPUT_ASR_MODEL="qwen"
+# export VOICEINPUT_ASR_BACKEND="qwen"
+# export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-1.7B"
+# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
+# export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-1.7B"
+# export VOICEINPUT_ASR_DEVICE="auto"
+# export VOICEINPUT_ASR_LANGUAGE="中文"
+# export VOICEINPUT_ASR_ITN="true"
+# export VOICEINPUT_ASR_HOTWORDS=""
+EOF
+      ;;
+    qwen)
+      cat >"$tmp_file" <<'EOF'
+# VoiceInput shared configuration template.
+# Shell scripts source this file before deploying models or launching runtime.
+#
+# Use `scripts/voiceinput.sh model qwen` or `scripts/voiceinput.sh model funasr`
+# to rewrite this file with a selected default model.
+# Command-line arguments and explicit environment variables still override it.
+#
+# Keep one preset block uncommented below if you want a local default.
+
+## -------------------------------------------------------------------
+## FunASR preset
+## -------------------------------------------------------------------
+# export VOICEINPUT_ASR_MODEL="funasr"
+# export VOICEINPUT_ASR_BACKEND="funasr"
+# export VOICEINPUT_ASR_MODEL_ID="FunAudioLLM/Fun-ASR-Nano-2512"
+# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
+# export VOICEINPUT_ASR_MODEL_DIR="./models/FunAudioLLM/Fun-ASR-Nano-2512"
+# export VOICEINPUT_ASR_REMOTE_CODE="./models/FunAudioLLM/Fun-ASR-Nano-2512/model.py"
+# export VOICEINPUT_ASR_DEVICE="auto"
+# export VOICEINPUT_ASR_LANGUAGE="中文"
+# export VOICEINPUT_ASR_ITN="true"
+# export VOICEINPUT_ASR_HOTWORDS=""
+
+## -------------------------------------------------------------------
+## Qwen preset
+## -------------------------------------------------------------------
+export VOICEINPUT_ASR_MODEL="qwen"
+export VOICEINPUT_ASR_BACKEND="qwen"
+export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-1.7B"
+export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
+export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-1.7B"
+export VOICEINPUT_ASR_DEVICE="auto"
+export VOICEINPUT_ASR_LANGUAGE="中文"
+export VOICEINPUT_ASR_ITN="true"
+export VOICEINPUT_ASR_HOTWORDS=""
+EOF
+      ;;
+  esac
+
+  mv "$tmp_file" "$config_file"
+}
+
+voiceinput_model_impl() {
+  local model=""
+  local config_file="$(voiceinput_config_file_path)"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --config-file)
+        if [[ $# -lt 2 ]]; then
+          echo "缺少 --config-file 的值" >&2
+          exit 2
+        fi
+        config_file="$2"
+        shift 2
+        ;;
+      --help|-h)
+        cat >&2 <<'EOF'
+用法：
+  scripts/voiceinput.sh model <funasr|qwen> [--config-file /path/to/voiceinput.env]
+
+说明：
+  - 这个命令会把仓库级配置文件写成你选定的默认模型
+  - 之后 bootstrap/install/smoke 会默认使用这个模型，除非你再用 --model 覆盖
+EOF
+        exit 0
+        ;;
+      *)
+        if [[ -z "$model" ]]; then
+          model="$1"
+          shift
+        else
+          echo "不支持的参数：$1" >&2
+          exit 2
+        fi
+        ;;
+    esac
+  done
+
+  if [[ -z "$model" ]]; then
+    echo "用法：scripts/voiceinput.sh model <funasr|qwen> [--config-file /path/to/voiceinput.env]" >&2
+    exit 2
+  fi
+
+  local normalized_model
+  if ! normalized_model="$(voiceinput_normalize_model_choice "$model")"; then
+    echo "不支持的模型：$model" >&2
+    exit 2
+  fi
+
+  mkdir -p "$(dirname "$config_file")"
+  voiceinput_write_model_config "$normalized_model" "$config_file"
+  echo "已写入默认模型：$normalized_model"
+  echo "配置文件：$config_file"
+}
+
 voiceinput_bootstrap_impl() {
   local deploy_args=()
   local smoke_audio_file=""
@@ -1188,6 +1356,7 @@ usage() {
 
 主命令：
   bootstrap              准备 Python 环境、安装依赖并下载模型
+  model                  写入仓库级默认模型配置
 
 平台子命令：
   macos install          打包并安装 macOS 输入法
@@ -1230,6 +1399,9 @@ if [[ "$cmd" == "macos" || "$cmd" == "linux" ]]; then
 fi
 
 case "$cmd" in
+  model)
+    voiceinput_model_impl "$@"
+    ;;
   bootstrap)
     voiceinput_bootstrap_impl "$@"
     ;;

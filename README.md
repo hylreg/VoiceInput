@@ -57,8 +57,9 @@
 仓库里的脚本现在只需要记三层：
 
 - `scripts/voiceinput.sh`：统一入口，优先推荐用子命令调用
-- `config/voiceinput.env`：仓库级默认配置，里面放了 FunASR 和 Qwen 两个可切换模板，也可以用 `VOICEINPUT_CONFIG_FILE` 指向其他文件
+- `config/voiceinput.env`：仓库级配置模板，里面放了 FunASR 和 Qwen 两个可切换模板，也可以用 `VOICEINPUT_CONFIG_FILE` 指向其他文件
 - `scripts/macos_input_method_common.sh` 和 `scripts/voiceinput_config.sh`：少量共享 helper
+- `scripts/voiceinput.sh model <funasr|qwen>`：把仓库默认模型写回 `config/voiceinput.env`
 
 旧脚本保留为兼容壳，方便你继续用原来的命令名，但不再作为推荐路径。
 
@@ -74,7 +75,7 @@
 8. 如果同时想跑 smoke，可以传入 `--audio-file testdata/smoke.wav`
 9. 默认会使用阿里云 PyPI 镜像；如果要改源，可以先设置 `UV_DEFAULT_INDEX`
 10. 依赖已经拆成 `scripts/requirements-asr-base.txt` 和 `scripts/requirements-asr-runtime.txt`，`scripts/requirements-asr.txt` 只是组合入口
-11. 默认 ASR 配置来自 `config/voiceinput.env`，里面已经放了 FunASR / Qwen 两个模板；也可以用 `VOICEINPUT_CONFIG_FILE` 指向别的文件，命令行参数和显式环境变量仍然会覆盖它
+11. 默认 ASR 配置来自 `config/voiceinput.env`，它只是模板；真正选模型时可以用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen>`
 12. 如果想用统一入口，可以直接运行 `scripts/voiceinput.sh bootstrap`
 
 ## Smoke 流程
