@@ -24,6 +24,7 @@ mod mac_runtime {
         CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
         CGEventType, EventField, KeyCode,
     };
+    use objc::runtime::Class;
     use objc::{msg_send, sel, sel_impl};
     use fs2::FileExt;
 
@@ -105,6 +106,48 @@ mod mac_runtime {
                     lock_path.display()
                 ))),
             }
+        }
+    }
+
+    unsafe fn configure_status_item_button(button: id) {
+        if button == nil {
+            return;
+        }
+
+        let title = NSString::alloc(nil).init_str("");
+        let tooltip = NSString::alloc(nil).init_str("VoiceInput 正在后台运行");
+        let symbol_name = NSString::alloc(nil).init_str("waveform.circle.fill");
+        let accessibility_description = NSString::alloc(nil).init_str("VoiceInput");
+        let _: () = msg_send![button, setTitle: title];
+        let _: () = msg_send![button, setToolTip: tooltip];
+
+        let nsimage_class = Class::get("NSImage").expect("NSImage class");
+        let image: id = msg_send![
+            nsimage_class,
+            imageWithSystemSymbolName: symbol_name
+            accessibilityDescription: accessibility_description
+        ];
+
+        if image != nil {
+            let _: () = msg_send![image, setTemplate: YES];
+            let _: () = msg_send![button, setImage: image];
+        }
+    }
+
+    unsafe fn configure_application_icon() {
+        let symbol_name = NSString::alloc(nil).init_str("waveform.circle.fill");
+        let accessibility_description = NSString::alloc(nil).init_str("VoiceInput");
+        let nsimage_class = Class::get("NSImage").expect("NSImage class");
+        let image: id = msg_send![
+            nsimage_class,
+            imageWithSystemSymbolName: symbol_name
+            accessibilityDescription: accessibility_description
+        ];
+
+        if image != nil {
+            let _: () = msg_send![image, setTemplate: YES];
+            let app = NSApp();
+            let _: () = msg_send![app, setApplicationIconImage: image];
         }
     }
 
@@ -245,17 +288,13 @@ mod mac_runtime {
             let pool = NSAutoreleasePool::new(nil);
             let app = NSApp();
             app.setActivationPolicy_(NSApplicationActivationPolicyAccessory);
+            configure_application_icon();
 
             if config.show_status_item {
                 let status_bar = NSStatusBar::systemStatusBar(nil);
                 let status_item = status_bar.statusItemWithLength_(NSVariableStatusItemLength);
                 let button: id = status_item.button();
-                if button != nil {
-                    let title = NSString::alloc(nil).init_str("VoiceInput");
-                    let tooltip = NSString::alloc(nil).init_str("VoiceInput 正在后台运行");
-                    let _: () = msg_send![button, setTitle: title];
-                    let _: () = msg_send![button, setToolTip: tooltip];
-                }
+                configure_status_item_button(button);
 
                 let menu = NSMenu::new(nil).autorelease();
                 let quit_title = NSString::alloc(nil).init_str("退出");
@@ -267,16 +306,15 @@ mod mac_runtime {
                 status_item.setMenu_(menu);
             }
 
-            println!("VoiceInput 常驻应用已启动");
-            println!("热键：{}", config.app.activation_hotkey);
-            println!("说明：按一次开始录音，按一次停止并转写");
-
             let recorder = MicAudioRecorder::new(config.max_recording_duration);
             let bridge: Box<dyn MacImeBridge> = Box::new(ClipboardMacImeBridge::default());
             let host = MacInputMethodHost::new_with_bridge(config.host.clone(), bridge);
             println!("正在预加载 ASR 模型...");
             let asr_runner = PythonFunAsrRunner::connect(config.asr.clone())?;
             println!("ASR 模型预加载完成");
+            println!("VoiceInput 常驻应用已启动");
+            println!("热键：{}", config.app.activation_hotkey);
+            println!("说明：按一次开始录音，按一次停止并转写");
             let transcriber =
                 voice_input_asr::LocalFunAsrTranscriber::new(config.asr, Box::new(asr_runner));
             let controller = AppController::new(

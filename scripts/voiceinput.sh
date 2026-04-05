@@ -1002,7 +1002,7 @@ EOF
   local plist_file="$contents_dir/Info.plist"
   local app_bin_name="voice-input-macos-app"
   local app_bin_path="target/release/$app_bin_name"
-  local icon_source="/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns"
+  local icon_source="/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericSpeaker.icns"
   local icon_name="VoiceInput.icns"
 
   echo "正在编译 macOS 常驻 app"

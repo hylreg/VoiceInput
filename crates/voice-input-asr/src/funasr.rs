@@ -279,10 +279,13 @@ import os
 import sys
 
 import torch
+from transformers.utils import logging as hf_logging
 from qwen_asr import Qwen3ASRModel
 
 model_dir = sys.argv[1]
 device = sys.argv[2]
+
+hf_logging.set_verbosity_error()
 
 if device == "cuda":
     device_map = "cuda:0"
@@ -291,6 +294,39 @@ else:
     device_map = "cpu"
     dtype = torch.float32
 
+
+def sanitize_generation_config(model):
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is None:
+        return
+
+    temperature = getattr(generation_config, "temperature", None)
+    if temperature is not None:
+        try:
+            generation_config.temperature = None
+        except Exception:
+            pass
+
+    pad_token_id = getattr(generation_config, "pad_token_id", None)
+    if pad_token_id is None:
+        eos_token_id = getattr(generation_config, "eos_token_id", None)
+        if eos_token_id is None:
+            eos_token_id = getattr(getattr(model, "config", None), "eos_token_id", None)
+        if eos_token_id is not None:
+            try:
+                generation_config.pad_token_id = eos_token_id
+            except Exception:
+                pass
+            try:
+                model.config.pad_token_id = eos_token_id
+            except Exception:
+                pass
+
+    try:
+        generation_config.validate(is_init=False)
+    except Exception:
+        pass
+
 with contextlib.redirect_stdout(sys.stderr):
     model = Qwen3ASRModel.from_pretrained(
         model_dir,
@@ -298,6 +334,7 @@ with contextlib.redirect_stdout(sys.stderr):
         dtype=dtype,
         max_inference_batch_size=1,
     )
+    sanitize_generation_config(model)
 
 print(json.dumps({"ready": True}), flush=True)
 
@@ -346,12 +383,15 @@ import json
 import sys
 
 import torch
+from transformers.utils import logging as hf_logging
 from qwen_asr import Qwen3ASRModel
 
 model_dir = sys.argv[1]
 audio_path = sys.argv[2]
 device = sys.argv[3]
 language = sys.argv[4]
+
+hf_logging.set_verbosity_error()
 
 if language in ("", "auto", "automatic", "自动"):
     language = None
@@ -363,6 +403,39 @@ else:
     device_map = "cpu"
     dtype = torch.float32
 
+
+def sanitize_generation_config(model):
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is None:
+        return
+
+    temperature = getattr(generation_config, "temperature", None)
+    if temperature is not None:
+        try:
+            generation_config.temperature = None
+        except Exception:
+            pass
+
+    pad_token_id = getattr(generation_config, "pad_token_id", None)
+    if pad_token_id is None:
+        eos_token_id = getattr(generation_config, "eos_token_id", None)
+        if eos_token_id is None:
+            eos_token_id = getattr(getattr(model, "config", None), "eos_token_id", None)
+        if eos_token_id is not None:
+            try:
+                generation_config.pad_token_id = eos_token_id
+            except Exception:
+                pass
+            try:
+                model.config.pad_token_id = eos_token_id
+            except Exception:
+                pass
+
+    try:
+        generation_config.validate(is_init=False)
+    except Exception:
+        pass
+
 with contextlib.redirect_stdout(sys.stderr):
     model = Qwen3ASRModel.from_pretrained(
         model_dir,
@@ -370,6 +443,7 @@ with contextlib.redirect_stdout(sys.stderr):
         dtype=dtype,
         max_inference_batch_size=1,
     )
+    sanitize_generation_config(model)
     res = model.transcribe(
         audio=audio_path,
         context="",
