@@ -103,14 +103,13 @@ Python 环境：
 ## 本地 ASR 来源
 
 - ModelScope 模型页：`https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512`
-- 默认本地缓存目录：`./models/FunAudioLLM/Fun-ASR-Nano-2512`
-- 也兼容 Qwen 模型：`Qwen/Qwen3-ASR-1.7B`，缓存到 `./models/Qwen/Qwen3-ASR-1.7B`
-- 另外也支持 `Qwen/Qwen3-ASR-0.6B`，缓存到 `./models/Qwen/Qwen3-ASR-0.6B`
-- 仓库级配置模板是 [`config/voiceinput.env`](../config/voiceinput.env)，里面放了 FunASR、Qwen 1.7B 和 Qwen 0.6B 三个可切换模板；它本身不再固定默认模型。真要选模型时，优先用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>`
+- 默认本地缓存目录：`./models/Qwen/Qwen3-ASR-0.6B`
+- 也兼容 `FunAudioLLM/Fun-ASR-Nano-2512` 和 `Qwen/Qwen3-ASR-1.7B`，缓存分别是 `./models/FunAudioLLM/Fun-ASR-Nano-2512` 和 `./models/Qwen/Qwen3-ASR-1.7B`
+- 仓库级配置模板是 [`config/voiceinput.env`](../config/voiceinput.env)，当前默认写入的是 Qwen 0.6B；真要选模型时，优先用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>`
 - 统一入口是 [`scripts/voiceinput.sh`](../scripts/voiceinput.sh)，比如 `scripts/voiceinput.sh bootstrap`、`scripts/voiceinput.sh macos install`
 - 旧脚本现在主要是兼容壳，方便你继续使用原来的命令名
 - `voice-input-asr` 里的 Python runner 会根据 `FunAsrConfig` 的 `backend` 选择 FunASR 或 Qwen 路径；FunASR 会使用 `remote_code`、`device`、`language` 和 `itn`，Qwen 会优先使用 `model_id`、`device` 和 `language`
-- 用 [`scripts/deploy_funasr_model.py`](../scripts/deploy_funasr_model.py) 把模型下载到本地缓存目录，`--backend qwen` 会下载 `Qwen/Qwen3-ASR-1.7B`
+- 用 [`scripts/deploy_funasr_model.py`](../scripts/deploy_funasr_model.py) 把模型下载到本地缓存目录，`--backend qwen` 会下载 `Qwen/Qwen3-ASR-1.7B`，`--model-id Qwen/Qwen3-ASR-0.6B` 会落到 0.6B 缓存目录
 - Python 依赖见 [`scripts/requirements-asr-base.txt`](../scripts/requirements-asr-base.txt) 和 [`scripts/requirements-asr-runtime.txt`](../scripts/requirements-asr-runtime.txt)
 
 ### 推荐部署步骤

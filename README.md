@@ -44,8 +44,8 @@
 - Linux host crate，拆分了 IBus/Fcitx5 后端与 IBus bridge 层
 - Linux IBus 路径绑定到 `ibus` crate + D-Bus 抽象，而不是 `glib`
 - IBus bridge 已使用真实 `ibus` crate 调用：`Bus`、`InputContext`、focus、surrounding text、reset、signal subscriptions
-- 本地 ASR 默认使用 ModelScope 上的 `FunAudioLLM/Fun-ASR-Nano-2512`，缓存到 `./models/FunAudioLLM/Fun-ASR-Nano-2512`
-- 也兼容 `Qwen/Qwen3-ASR-1.7B` 和 `Qwen/Qwen3-ASR-0.6B`，可通过 `VOICEINPUT_ASR_MODEL_ID=...` 切换，缓存默认目录分别是 `./models/Qwen/Qwen3-ASR-1.7B` 和 `./models/Qwen/Qwen3-ASR-0.6B`
+- 本地 ASR 默认使用 `Qwen/Qwen3-ASR-0.6B`，缓存到 `./models/Qwen/Qwen3-ASR-0.6B`
+- 也兼容 `FunAudioLLM/Fun-ASR-Nano-2512` 和 `Qwen/Qwen3-ASR-1.7B`，可通过 `VOICEINPUT_ASR_MODEL_ID=...` 切换，缓存默认目录分别是 `./models/FunAudioLLM/Fun-ASR-Nano-2512` 和 `./models/Qwen/Qwen3-ASR-1.7B`
 - 模型部署脚本：[`scripts/deploy_funasr_model.py`](./scripts/deploy_funasr_model.py)（支持 `--backend funasr|qwen`）
 - Python 依赖使用本地 `.venv` 和 `uv` 管理
 - macOS smoke 路径默认使用 `uv run`
@@ -57,7 +57,7 @@
 仓库里的脚本现在只需要记三层：
 
 - `scripts/voiceinput.sh`：统一入口，优先推荐用子命令调用
-- `config/voiceinput.env`：仓库级配置模板，里面放了 FunASR 和 Qwen 两个可切换模板，也可以用 `VOICEINPUT_CONFIG_FILE` 指向其他文件
+- `config/voiceinput.env`：仓库级配置模板，默认写入 Qwen 0.6B，也可以用 `VOICEINPUT_CONFIG_FILE` 指向其他文件
 - `scripts/macos_input_method_common.sh` 和 `scripts/voiceinput_config.sh`：少量共享 helper
 - `scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>`：把仓库默认模型写回 `config/voiceinput.env`
 
@@ -71,11 +71,11 @@
 4. `source .venv/bin/activate`
 5. 或者直接使用 `uv run`
 6. 也可以直接运行一键部署脚本：`scripts/voiceinput.sh bootstrap`
-7. 如果要切到 Qwen，可以传入 `--model qwen`；如果要切到 Qwen 0.6B，可以传入 `--model qwen-0.6b`，`--backend qwen` 也兼容
+7. 如果要切到 Qwen 1.7B，可以传入 `--model qwen`；如果要切到 Qwen 0.6B，可以传入 `--model qwen-0.6b`，`--backend qwen` 也兼容
 8. 如果同时想跑 smoke，可以传入 `--audio-file testdata/smoke.wav`
 9. 默认会使用阿里云 PyPI 镜像；如果要改源，可以先设置 `UV_DEFAULT_INDEX`
 10. 依赖已经拆成 `scripts/requirements-asr-base.txt` 和 `scripts/requirements-asr-runtime.txt`，`scripts/requirements-asr.txt` 只是组合入口
-11. 默认 ASR 配置来自 `config/voiceinput.env`，它只是模板；真正选模型时可以用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>`
+11. 默认 ASR 配置来自 `config/voiceinput.env`，仓库当前默认写入的是 `Qwen/Qwen3-ASR-0.6B`；真正选模型时可以用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>`
 12. 如果想用统一入口，可以直接运行 `scripts/voiceinput.sh bootstrap`
 
 ## Smoke 流程
