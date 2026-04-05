@@ -12,32 +12,25 @@
 
 ## macOS
 
-使用 `InputMethodKit`。
+使用常驻 app + Accessibility / Unicode / 剪贴板注入。
 
 原生宿主应该负责：
 
-- 接收系统输入法管线里的按键事件
-- 通过类似 `setMarkedText` 的行为更新 composition
-- 通过原生的 insert / commit API 提交文本
+- 接收全局热键和录音事件
+- 把转写结果注入到当前前台应用
+- 在权限不足或注入失败时给出清晰提示
 
-仓库里现在已经有一个 macOS host crate，用来隔离这层桥接。它现在已经能跑出一条可用闭环：全局热键触发、麦克风录音、本地 Fun-ASR 转写，然后优先通过 `InputMethodKit` / Accessibility 注入把文本送到当前光标，最后才会回退到剪贴板。后面如果要更原生，还可以继续把提交层完全收束到真正的 `InputMethodKit` 事件。
+仓库里现在已经有一个 macOS host crate，用来隔离这层桥接。它现在已经能跑出一条可用闭环：全局热键触发、麦克风录音、本地 ASR 转写，然后把文本送到当前前台应用。
 
-现在 macOS crate 还带了一个 smoke binary，会读取本地音频文件并通过本地 Fun-ASR 模型转写：
+现在 macOS crate 还带了一个 smoke 路径，会读取本地音频文件并通过本地模型转写：
 
-- `cargo run -p voice-input-macos -- --audio-file testdata/smoke.wav`
 - 这个 smoke 路径建议使用 WAV/PCM 输入
-- 推荐命令是 `uv run -- cargo run -p voice-input-macos -- --audio-file testdata/smoke.wav`
-- 也可以用 `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav`
+- 用 `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav` 触发
 - 实时运行时已经支持热键开始/停止录音，并在结束后提交文本
 
-此外，仓库里还加了一个系统级 IME 入口：
-
-- `cargo run -p voice-input-macos --bin voice-input-macos-ime`
-- `cargo run -p voice-input-macos --bin voice-input-macos-app`
-- `voice-input-macos-ime` 是系统级入口，默认不显示菜单栏图标
 - `voice-input-macos-app` 是常驻菜单栏入口
-- 这两个入口当前都会启动同一套实时运行时
-- 当前提交动作优先走 `InputMethodKit` 和 Accessibility 注入，Unicode 事件作为次级兜底，剪贴板只作为最后兜底
+- 这个入口会启动同一套实时运行时
+- 当前提交动作优先走 Accessibility 注入，Unicode 事件作为次级兜底，剪贴板只作为最后兜底
 
 Python 环境：
 
@@ -105,9 +98,8 @@ Python 环境：
 - ModelScope 模型页：`https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512`
 - 默认本地缓存目录：`./models/Qwen/Qwen3-ASR-0.6B`
 - 也兼容 `FunAudioLLM/Fun-ASR-Nano-2512` 和 `Qwen/Qwen3-ASR-1.7B`，缓存分别是 `./models/FunAudioLLM/Fun-ASR-Nano-2512` 和 `./models/Qwen/Qwen3-ASR-1.7B`
-- 仓库级配置模板是 [`config/voiceinput.env`](../config/voiceinput.env)，当前默认写入的是 Qwen 0.6B；真要选模型时，优先用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>`
-- 统一入口是 [`scripts/voiceinput.sh`](../scripts/voiceinput.sh)，比如 `scripts/voiceinput.sh bootstrap`、`scripts/voiceinput.sh macos install`
-- 旧脚本现在主要是兼容壳，方便你继续使用原来的命令名
+- 仓库级配置模板是 [`config/voiceinput.env`](../config/voiceinput.env)，当前默认写入的是 Qwen 0.6B；选模型时优先用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>`
+- 统一入口是 [`scripts/voiceinput.sh`](../scripts/voiceinput.sh)
 - `voice-input-asr` 里的 Python runner 会根据 `FunAsrConfig` 的 `backend` 选择 FunASR 或 Qwen 路径；FunASR 会使用 `remote_code`、`device`、`language` 和 `itn`，Qwen 会优先使用 `model_id`、`device` 和 `language`
 - 用 [`scripts/deploy_funasr_model.py`](../scripts/deploy_funasr_model.py) 把模型下载到本地缓存目录，`--backend qwen` 会下载 `Qwen/Qwen3-ASR-1.7B`，`--model-id Qwen/Qwen3-ASR-0.6B` 会落到 0.6B 缓存目录
 - Python 依赖见 [`scripts/requirements-asr-base.txt`](../scripts/requirements-asr-base.txt) 和 [`scripts/requirements-asr-runtime.txt`](../scripts/requirements-asr-runtime.txt)
@@ -116,42 +108,22 @@ Python 环境：
 
 1. `scripts/voiceinput.sh bootstrap`
 2. 如果想在部署后直接验证，可以传入 `--audio-file testdata/smoke.wav`
-3. 或者手动执行 `uv venv .venv`
-4. `uv pip install -r scripts/requirements-asr-base.txt`
-5. `uv pip install -r scripts/requirements-asr-runtime.txt`
-6. `uv run -- python scripts/deploy_funasr_model.py --skip-existing`
-7. 如果要部署 Qwen 1.7B 模型，可以运行 `uv run -- python scripts/deploy_funasr_model.py --backend qwen --model-id Qwen/Qwen3-ASR-1.7B --skip-existing`
-8. 如果要部署 Qwen 0.6B 模型，可以运行 `uv run -- python scripts/deploy_funasr_model.py --backend qwen --model-id Qwen/Qwen3-ASR-0.6B --skip-existing`
-9. 确认模型目录存在于 `./models/FunAudioLLM/Fun-ASR-Nano-2512`，或者 Qwen 的 `./models/Qwen/Qwen3-ASR-1.7B` / `./models/Qwen/Qwen3-ASR-0.6B`
-10. `scripts/voiceinput.sh bootstrap` 内部会先装 base 和 runtime，再部署模型，这样 Mac 上能正确检测 MPS
-11. `scripts/voiceinput.sh bootstrap --model qwen` 会直接走 Qwen 1.7B 的下载和部署路径，`--backend qwen` 也兼容
-12. `scripts/voiceinput.sh bootstrap --model qwen-0.6b` 会直接走 Qwen 0.6B 的下载和部署路径
-13. 统一入口可写成 `scripts/voiceinput.sh bootstrap --model qwen`
+3. `scripts/voiceinput.sh bootstrap` 内部会先装 base 和 runtime，再部署模型，这样 Mac 上能正确检测 MPS
+4. 需要切模型时可以加 `--model qwen` 或 `--model qwen-0.6b`
 
-### 系统级安装
+### macOS 常驻 app
 
 1. `scripts/voiceinput.sh macos install`
-2. 如果只想打包，不安装，可以运行 `scripts/voiceinput.sh macos package`
-3. 日常调试刷新可以运行 `scripts/voiceinput.sh macos reinstall`
-4. 如果要把已安装的 VoiceInput 注册进 pluginkit，并把它写进当前用户的输入法偏好，可以运行 `scripts/voiceinput.sh macos enable`
-5. 如果想一条命令完成打包 + 刷新 + 启用，可以运行 `scripts/voiceinput.sh macos dev-install`
-6. 如果要看系统到底有没有登记这个输入法，可以运行 `scripts/voiceinput.sh macos dump-state`
-7. 统一入口可写成 `scripts/voiceinput.sh macos install`
-8. 安装脚本会把 `dist/VoiceInput.app` 复制到 `~/Library/Input Methods/`
-9. 这个包现在包含一个容器 app 和一个 `Contents/PlugIns/VoiceInput.appex` extension
-10. 安装和调试刷新子命令都会自动执行启用步骤
-11. 重新登录或重启输入法服务
-12. 系统输入法列表里选择 VoiceInput
-13. 首次运行前建议授予“麦克风”和“辅助功能”权限
+2. 开发一键启动可以运行 `scripts/voiceinput.sh macos dev-install`
+3. 如果同时想跑 smoke，可以加 `--audio-file testdata/smoke.wav`
+4. 首次运行前建议授予“麦克风”和“辅助功能”权限
 
-如果系统输入法列表里找不到 `VoiceInput`，先按这个顺序检查：
+如果 macOS app 没有正常启动或不能输入，先按这个顺序检查：
 
-1. `ls ~/Library/Input\ Methods/VoiceInput.app`
-2. 如果文件不存在，说明安装没有完成，重新运行安装脚本
-3. 如果文件存在，先注销再登录一次，或者重启系统输入法相关服务
-4. 如果 bundle 是从下载包或外部目录拷贝来的，再执行：`xattr -dr com.apple.quarantine ~/Library/Input\ Methods/VoiceInput.app`
-5. 仍然没有出现时，回看安装日志里是否有编译、复制或权限错误
-6. 运行 `scripts/voiceinput.sh macos dump-state` 看 `VoiceInput` 是否已经进入 TIS 列表，以及 extension 是否存在
+1. `source .venv/bin/activate`
+2. `scripts/voiceinput.sh macos install`
+3. 如果没有输入效果，先确认“麦克风”和“辅助功能”权限
+4. 仍然异常时，回看终端里的启动日志，确认没有编译失败或录音失败
 
 ### GPU 处理
 
@@ -163,9 +135,8 @@ Python 环境：
 
 ### Smoke 路径
 
-- `uv run -- cargo run -p voice-input-macos -- --audio-file testdata/smoke.wav`
-- 或者 `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav`
-- 或者直接 `scripts/voiceinput.sh bootstrap --audio-file testdata/smoke.wav`
+- `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav`
+- 也可以直接 `scripts/voiceinput.sh bootstrap --audio-file testdata/smoke.wav`
 
 ## 推荐推进顺序
 
@@ -194,36 +165,11 @@ Ubuntu 20.04 上优先用 IBus 跑通最小闭环。
 - `libasound2-dev`
 - `portaudio19-dev`
 
-然后可以先跑：
+然后可以先跑 `scripts/voiceinput.sh linux smoke --audio-file testdata/smoke.wav`。
 
-```bash
-cargo run -p voice-input-linux --features ibus -- --audio-file testdata/smoke.wav
-```
-
-或者：
-
-```bash
-scripts/voiceinput.sh linux smoke --audio-file testdata/smoke.wav
-```
-
-常驻版可以这样启动：
-
-```bash
-cargo run -p voice-input-linux --bin voice-input-linux-app -- --backend ibus
-```
-
-启动后会常驻在托盘里，菜单提供状态、停止当前录音和退出；平时还是用全局热键开始录音。
-
-如果你是直接用 `cargo run`，记得加上 `--features ibus`，否则 IBus 会退回成未绑定的占位实现。
-
-如果想要真正的一键启动，可以直接用：
-
-```bash
-scripts/voiceinput.sh linux install
-```
+常驻版可以直接用 `scripts/voiceinput.sh linux install` 启动。启动后会常驻在托盘里，菜单提供状态、停止当前录音和退出；平时还是用全局热键开始录音。
 
 默认会先跑 Linux bootstrap，自动安装缺失的 Ubuntu 20.04 常用依赖，然后启动常驻托盘版；传入 `--audio-file` 时会改成 smoke 模式。
 如果要在安装时切到 Qwen，可以传入 `--model qwen`；这个参数会原样透传给 `scripts/voiceinput.sh bootstrap`。
-统一入口也可以这样用：`scripts/voiceinput.sh linux install`
 
 当前 Linux 目标是先把转写结果通过 IBus 宿主送进当前焦点窗口。Fcitx5 还保留为后续单独接 native bindings 的路线。

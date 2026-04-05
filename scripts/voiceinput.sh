@@ -606,7 +606,7 @@ EOF
 
   if [[ -n "$smoke_audio_file" ]]; then
     echo "正在运行 macOS smoke"
-    uv run -- cargo run -p voice-input-macos -- --audio-file "$smoke_audio_file"
+    uv run -- cargo run -p voice-input-macos --bin voice-input-macos -- --audio-file "$smoke_audio_file"
   fi
 
   echo "一键部署完成"
@@ -649,9 +649,15 @@ EOF
     exit 2
   fi
 
+  voiceinput_ensure_cargo
   voiceinput_ensure_uv
   cd "$REPO_ROOT"
-  uv run -- cargo run -p voice-input-macos -- --audio-file "$audio_file"
+  local cargo_bin
+  cargo_bin="$(command -v cargo || true)"
+  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
+    cargo_bin="${HOME}/.cargo/bin/cargo"
+  fi
+  uv run -- "$cargo_bin" run -p voice-input-macos --bin voice-input-macos -- --audio-file "$audio_file"
 }
 
 voiceinput_linux_smoke_impl() {
@@ -715,15 +721,22 @@ EOF
     exit 2
   fi
 
+  voiceinput_ensure_cargo
   voiceinput_ensure_uv
   voiceinput_ensure_linux_dev_deps
+  voiceinput_refresh_cargo_path
   cd "$REPO_ROOT"
-  uv run -- cargo run -p voice-input-linux --features ibus -- "${smoke_args[@]}"
+  local cargo_bin
+  cargo_bin="$(command -v cargo || true)"
+  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
+    cargo_bin="${HOME}/.cargo/bin/cargo"
+  fi
+  uv run -- "$cargo_bin" run -p voice-input-linux --features ibus -- "${smoke_args[@]}"
 }
 
 voiceinput_macos_install_impl() {
   local audio_file=""
-  local run_smoke_after_install=false
+  local run_smoke_before_launch=false
   local bootstrap_args=()
 
   while [[ $# -gt 0 ]]; do
@@ -773,11 +786,11 @@ voiceinput_macos_install_impl() {
           exit 2
         fi
         audio_file="$2"
-        run_smoke_after_install=true
+        run_smoke_before_launch=true
         shift 2
         ;;
       --skip-smoke)
-        run_smoke_after_install=false
+        run_smoke_before_launch=false
         audio_file=""
         shift
         ;;
@@ -788,10 +801,9 @@ voiceinput_macos_install_impl() {
 
 说明：
   - 先创建 Python 环境并下载本地模型
-  - 再打包系统级 macOS 输入法应用
-  - 最后复制到 ~/Library/Input Methods/
-  - 安装完成后会自动执行启用脚本
-  - 如果传入 --audio-file，会在安装后自动运行一次 smoke 验证
+  - 再启动 macOS 常驻 app
+  - 默认不再做系统输入法注册，也不再依赖重新登录
+  - 如果传入 --audio-file，会在启动前先运行一次 smoke 验证
   - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
   - 可选 ASR 部署参数会原样传给 scripts/voiceinput.sh bootstrap
   - `--model funasr|qwen|qwen-0.6b` 会分别选择 FunASR、Qwen 1.7B、Qwen 0.6B
@@ -806,30 +818,27 @@ EOF
   done
 
   cd "$REPO_ROOT"
-  voiceinput_bootstrap_impl "${bootstrap_args[@]}"
+  if ((${#bootstrap_args[@]} > 0)); then
+    voiceinput_bootstrap_impl "${bootstrap_args[@]}"
+  else
+    voiceinput_bootstrap_impl
+  fi
 
-  echo "正在打包系统级输入法应用"
-  voiceinput_package_macos_impl
-
-  # shellcheck disable=SC1090
-  source scripts/macos_input_method_common.sh
-  local install_dir="$HOME/Library/Input Methods"
-  local app_bundle="dist/VoiceInput.app"
-  local target_bundle="$install_dir/VoiceInput.app"
-
-  echo "正在安装到系统输入法目录：$target_bundle"
-  target_bundle="$(voiceinput_sync_bundle "$app_bundle" "$install_dir")"
-
-  echo "安装完成"
-  echo "已安装到：$target_bundle"
-  echo "启用完成"
-  echo "请重新登录或重启输入法服务，然后在系统输入法列表中启用 VoiceInput"
-  echo "首次运行前建议授予“麦克风”和“辅助功能”权限"
-
-  if [[ "$run_smoke_after_install" == true ]]; then
+  if [[ "$run_smoke_before_launch" == true ]]; then
     echo "正在运行 smoke 验证"
+    voiceinput_ensure_cargo
     voiceinput_macos_smoke_impl --audio-file "$audio_file"
   fi
+
+  echo "正在启动 macOS 常驻应用"
+  voiceinput_ensure_cargo
+  voiceinput_ensure_uv
+  local cargo_bin
+  cargo_bin="$(command -v cargo || true)"
+  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
+    cargo_bin="${HOME}/.cargo/bin/cargo"
+  fi
+  uv run -- "$cargo_bin" run -p voice-input-macos --bin voice-input-macos-app --release
 }
 
 voiceinput_linux_install_impl() {
@@ -930,12 +939,14 @@ EOF
 
   if [[ "$run_smoke_after_bootstrap" == true ]]; then
     echo "正在运行 Linux smoke"
+    voiceinput_ensure_cargo
     voiceinput_linux_smoke_impl --audio-file "$audio_file" --backend "$backend"
     exit 0
   fi
 
   if [[ "$run_live_app_after_bootstrap" == true ]]; then
     echo "正在启动 Linux 常驻托盘版"
+    voiceinput_ensure_cargo
     voiceinput_ensure_uv
     voiceinput_refresh_cargo_path
     local cargo_bin
@@ -956,8 +967,8 @@ voiceinput_package_macos_impl() {
   scripts/voiceinput.sh macos package
 
 说明：
-  - 这个命令只负责打包 macOS 输入法
-  - 不会安装到系统目录，也不会启动 smoke
+  - 打包 macOS 常驻 app
+  - 默认输出到 dist/VoiceInput.app
 EOF
         exit 0
         ;;
@@ -979,35 +990,25 @@ EOF
 
   local app_name="${APP_NAME:-VoiceInput}"
   local container_bundle_id="${CONTAINER_BUNDLE_ID:-com.example.voiceinput.container}"
-  local extension_name="${EXTENSION_NAME:-VoiceInput.appex}"
   local dist_dir="${DIST_DIR:-dist}"
   local app_bundle="$dist_dir/$app_name.app"
   local contents_dir="$app_bundle/Contents"
   local macos_dir="$contents_dir/MacOS"
   local resources_dir="$contents_dir/Resources"
-  local plugins_dir="$contents_dir/PlugIns"
-  local extension_bundle="$plugins_dir/$extension_name"
-  local extension_contents_dir="$extension_bundle/Contents"
-  local extension_macos_dir="$extension_contents_dir/MacOS"
-  local extension_resources_dir="$extension_contents_dir/Resources"
   local plist_file="$contents_dir/Info.plist"
   local app_bin_name="voice-input-macos-app"
-  local ime_bin_name="voice-input-macos-ime"
   local app_bin_path="target/release/$app_bin_name"
-  local ime_bin_path="target/release/$ime_bin_name"
   local icon_source="/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns"
   local icon_name="VoiceInput.icns"
 
-  echo "正在编译 macOS 容器和系统级 IME 入口"
-  cargo build -p voice-input-macos --bin "$app_bin_name" --bin "$ime_bin_name" --release
+  echo "正在编译 macOS 常驻 app"
+  cargo build -p voice-input-macos --bin "$app_bin_name" --release
 
-  echo "正在组装应用包：$app_bundle"
+  echo "正在组装 macOS 常驻 app：$app_bundle"
   rm -rf "$app_bundle"
-  mkdir -p "$macos_dir" "$resources_dir" "$plugins_dir" "$extension_macos_dir" "$extension_resources_dir"
+  mkdir -p "$macos_dir" "$resources_dir"
   cp "$app_bin_path" "$macos_dir/$app_name"
-  cp "$ime_bin_path" "$extension_macos_dir/VoiceInputInputMethod"
   cp "$icon_source" "$resources_dir/$icon_name"
-  cp "$icon_source" "$extension_resources_dir/$icon_name"
 
   cat >"$contents_dir/PkgInfo" <<'EOF'
 APPL????
@@ -1130,137 +1131,21 @@ EOF
 
   echo "正在输出应用包：$app_bundle"
   echo "Container Bundle ID: $container_bundle_id"
-  echo "Input Method Bundle ID: com.example.voiceinput.inputmethod"
-}
-
-voiceinput_reinstall_macos_impl() {
-  local app_bundle="${APP_BUNDLE:-dist/VoiceInput.app}"
-  local install_dir="${INSTALL_DIR:-$HOME/Library/Input Methods}"
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --app-bundle)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 --app-bundle 的值" >&2
-          exit 2
-        fi
-        app_bundle="$2"
-        shift 2
-        ;;
-      --help|-h)
-        cat <<'EOF'
-用法：
-  scripts/voiceinput.sh macos reinstall [--app-bundle /path/to/VoiceInput.app]
-EOF
-        exit 0
-        ;;
-      *)
-        echo "不支持的参数：$1" >&2
-        exit 2
-        ;;
-    esac
-  done
-
-  if [[ ! -d "$app_bundle" ]]; then
-    echo "找不到应用包：$app_bundle" >&2
-    echo "请先运行 scripts/voiceinput.sh macos package" >&2
-    exit 1
-  fi
-
-  cd "$REPO_ROOT"
-  # shellcheck disable=SC1090
-  source scripts/macos_input_method_common.sh
-
-  echo "正在刷新系统输入法安装：$install_dir/VoiceInput.app"
-  voiceinput_sync_bundle "$app_bundle" "$install_dir"
-  echo "刷新完成"
-  echo "启用完成"
-}
-
-voiceinput_enable_macos_impl() {
-  local app_bundle="${APP_BUNDLE:-$HOME/Library/Input Methods/VoiceInput.app}"
-  local bundle_id="${BUNDLE_ID:-com.example.voiceinput.inputmethod}"
-  local input_mode_id="${INPUT_MODE_ID:-com.example.voiceinput.inputmethod.default}"
-  local input_method_kind="${INPUT_METHOD_KIND:-Input Mode}"
-  local extension_bundle="${EXTENSION_BUNDLE:-$app_bundle/Contents/PlugIns/VoiceInput.appex}"
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --app-bundle)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 --app-bundle 的值" >&2
-          exit 2
-        fi
-        app_bundle="$2"
-        extension_bundle="$app_bundle/Contents/PlugIns/VoiceInput.appex"
-        shift 2
-        ;;
-      --bundle-id)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 --bundle-id 的值" >&2
-          exit 2
-        fi
-        bundle_id="$2"
-        shift 2
-        ;;
-      --input-mode-id)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 --input-mode-id 的值" >&2
-          exit 2
-        fi
-        input_mode_id="$2"
-        shift 2
-        ;;
-      --help|-h)
-        cat <<'EOF'
-用法：
-  scripts/voiceinput.sh macos enable [--app-bundle /path/to/VoiceInput.app] [--bundle-id ...] [--input-mode-id ...]
-EOF
-        exit 0
-        ;;
-      *)
-        echo "不支持的参数：$1" >&2
-        exit 2
-        ;;
-    esac
-  done
-
-  if [[ ! -d "$app_bundle" ]]; then
-    echo "找不到应用包：$app_bundle" >&2
-    echo "请先运行 scripts/voiceinput.sh macos reinstall 或 scripts/voiceinput.sh macos dev-install" >&2
-    exit 1
-  fi
-
-  if [[ ! -d "$extension_bundle" ]]; then
-    echo "找不到扩展包：$extension_bundle" >&2
-    echo "请确认这个 app bundle 内含有 VoiceInput.appex" >&2
-    exit 1
-  fi
-
-  cd "$REPO_ROOT"
-  # shellcheck disable=SC1090
-  source scripts/macos_input_method_common.sh
-  voiceinput_enable_bundle "$app_bundle" "$bundle_id" "$input_mode_id" "$input_method_kind" "$extension_bundle"
-  echo "启用完成"
 }
 
 voiceinput_dev_install_macos_impl() {
-  local app_bundle="${APP_BUNDLE:-dist/VoiceInput.app}"
+  local install_args=("$@")
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --app-bundle)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 --app-bundle 的值" >&2
-          exit 2
-        fi
-        app_bundle="$2"
-        shift 2
-        ;;
       --help|-h)
         cat <<'EOF'
 用法：
-  scripts/voiceinput.sh macos dev-install [--app-bundle /path/to/VoiceInput.app]
+  scripts/voiceinput.sh macos dev-install [ASR 部署参数...] [--audio-file /path/to/audio.wav]
+
+说明：
+  - 这个命令会复用 macos install 的默认 app 模式
+  - 适合开发时一次完成依赖准备、模型部署和 app 启动
 EOF
         exit 0
         ;;
@@ -1271,133 +1156,10 @@ EOF
     esac
   done
 
-  cd "$REPO_ROOT"
-  voiceinput_package_macos_impl
-  # shellcheck disable=SC1090
-  source scripts/macos_input_method_common.sh
-  voiceinput_sync_bundle "$app_bundle" "$HOME/Library/Input Methods"
-  echo "开发安装完成"
-}
-
-voiceinput_dump_macos_state_impl() {
-  local app_bundle="${APP_BUNDLE:-$HOME/Library/Input Methods/VoiceInput.app}"
-  local extension_bundle="${EXTENSION_BUNDLE:-$app_bundle/Contents/PlugIns/VoiceInput.appex}"
-  local target_bundle_id="${TARGET_BUNDLE_ID:-com.example.voiceinput.inputmethod}"
-  local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-
-  cd "$REPO_ROOT"
-
-  echo "== App Bundle =="
-  echo "APP_BUNDLE=$app_bundle"
-  if [[ -d "$app_bundle" ]]; then
-    plutil -p "$app_bundle/Contents/Info.plist" 2>/dev/null || true
-    echo
-    echo "xattr:"
-    xattr -l "$app_bundle" 2>/dev/null || echo "(none)"
+  if ((${#install_args[@]} > 0)); then
+    voiceinput_macos_install_impl "${install_args[@]}"
   else
-    echo "bundle not found"
-  fi
-
-  echo
-  echo "== Extension Bundle =="
-  echo "EXTENSION_BUNDLE=$extension_bundle"
-  if [[ -d "$extension_bundle" ]]; then
-    plutil -p "$extension_bundle/Contents/Info.plist" 2>/dev/null || true
-    echo
-    echo "xattr:"
-    xattr -l "$extension_bundle" 2>/dev/null || echo "(none)"
-  else
-    echo "bundle not found"
-  fi
-
-  echo
-  echo "== User HIToolbox =="
-  defaults read ~/Library/Preferences/com.apple.HIToolbox.plist 2>/dev/null || echo "(no user HIToolbox plist)"
-
-  echo
-  echo "== System HIToolbox =="
-  defaults read /Library/Preferences/com.apple.HIToolbox.plist 2>/dev/null || echo "(no system HIToolbox plist)"
-
-  echo
-  echo "== TIS Input Sources =="
-  if command -v swift >/dev/null 2>&1; then
-    TARGET_BUNDLE_ID="$target_bundle_id" swift - <<'SWIFT'
-import Carbon.HIToolbox
-import Foundation
-
-let target = ProcessInfo.processInfo.environment["TARGET_BUNDLE_ID"] ?? ""
-func dumpSources(includeAllInstalled: Bool, label: String) -> Bool {
-  guard let rawList = TISCreateInputSourceList(nil, includeAllInstalled) else {
-    print("\(label): <no sources>")
-    return false
-  }
-
-  let list = rawList.takeRetainedValue() as NSArray
-  var found = false
-
-  print("\(label): count=\(list.count)")
-  for case let src as TISInputSource in list {
-    var fields: [String] = []
-
-    if let bundle = TISGetInputSourceProperty(src, kTISPropertyBundleID) {
-      let bundleID = unsafeBitCast(bundle, to: CFString.self) as String
-      fields.append("bundle=\(bundleID)")
-      if bundleID == target {
-        found = true
-        fields.append("TARGET_MATCH")
-      }
-    }
-
-    if let sourceID = TISGetInputSourceProperty(src, kTISPropertyInputSourceID) {
-      let inputSourceID = unsafeBitCast(sourceID, to: CFString.self) as String
-      fields.append("sourceID=\(inputSourceID)")
-      if inputSourceID == target {
-        found = true
-        fields.append("TARGET_MATCH")
-      }
-    }
-
-    if let name = TISGetInputSourceProperty(src, kTISPropertyLocalizedName) {
-      let localized = unsafeBitCast(name, to: CFString.self) as String
-      fields.append("name=\(localized)")
-    }
-
-    if let kind = TISGetInputSourceProperty(src, kTISPropertyInputSourceType) {
-      let sourceType = unsafeBitCast(kind, to: CFString.self) as String
-      fields.append("type=\(sourceType)")
-    }
-
-    print(fields.joined(separator: " | "))
-  }
-
-  return found
-}
-
-var found = dumpSources(includeAllInstalled: false, label: "enabled")
-if !found {
-  found = dumpSources(includeAllInstalled: true, label: "installed")
-}
-
-if !found, !target.isEmpty {
-  print("TARGET_NOT_FOUND: \(target)")
-}
-SWIFT
-  else
-    echo "swift not found"
-  fi
-
-  echo
-  echo "== LaunchServices =="
-  if [[ -x "$lsregister" ]]; then
-    "$lsregister" -dump 2>/dev/null | rg -n "VoiceInput|${target_bundle_id//./\\.}|InputMethodConnectionName|InputMethodServerControllerClass|tsInputMethodCharacterRepertoireKey" || true
-  else
-    echo "lsregister not found"
-  fi
-
-  echo
-  echo "== mdls =="
-  if [[ -d "$app_bundle" ]]; then
-    mdls -name kMDItemCFBundleIdentifier -name kMDItemKind -name kMDItemContentType "$app_bundle" 2>/dev/null || true
+    voiceinput_macos_install_impl
   fi
 }
 
@@ -1573,13 +1335,10 @@ usage() {
   model                  写入仓库级默认模型配置
 
 平台子命令：
-  macos install          打包并安装 macOS 输入法
+  macos install          准备依赖、下载模型并启动 macOS 常驻 app
+  macos package          打包 macOS 常驻 app
   macos smoke            运行 macOS smoke
-  macos package          只打包 macOS 输入法
-  macos reinstall        刷新 macOS 输入法安装
-  macos enable           启用已安装的 macOS 输入法
-  macos dev-install      开发时打包 + 刷新 + 启用
-  macos dump-state       导出 macOS 输入法状态
+  macos dev-install      开发时准备依赖、下载模型并启动 app
   linux install          安装并启动 Linux 常驻版
   linux smoke            运行 Linux smoke
   linux dev              启动 Linux 开发常驻服务
@@ -1589,7 +1348,6 @@ usage() {
   - 所有子命令都会继续兼容现有脚本参数
   - 默认配置来自 config/voiceinput.env
   - 推荐优先使用 `scripts/voiceinput.sh <command> ...`
-  - 旧的扁平命令名（例如 macos-install、linux-smoke）仍然可用
 EOF
 }
 
@@ -1612,7 +1370,7 @@ if [[ "$cmd" == "macos" || "$cmd" == "linux" ]]; then
   cmd="${platform}-${action}"
 fi
 
-case "$cmd" in
+  case "$cmd" in
   model)
     voiceinput_model_impl "$@"
     ;;
@@ -1621,6 +1379,9 @@ case "$cmd" in
     ;;
   macos-install)
     voiceinput_macos_install_impl "$@"
+    ;;
+  macos-package)
+    voiceinput_package_macos_impl "$@"
     ;;
   macos-smoke)
     voiceinput_macos_smoke_impl "$@"
@@ -1631,20 +1392,8 @@ case "$cmd" in
   linux-smoke)
     voiceinput_linux_smoke_impl "$@"
     ;;
-  macos-package)
-    voiceinput_package_macos_impl "$@"
-    ;;
-  macos-reinstall)
-    voiceinput_reinstall_macos_impl "$@"
-    ;;
-  macos-enable)
-    voiceinput_enable_macos_impl "$@"
-    ;;
   macos-dev-install)
     voiceinput_dev_install_macos_impl "$@"
-    ;;
-  macos-dump-state)
-    voiceinput_dump_macos_state_impl "$@"
     ;;
   linux-dev)
     voiceinput_linux_dev_streaming_impl "$@"

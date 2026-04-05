@@ -40,31 +40,31 @@ pub struct UnwiredMacImeBridge;
 impl MacImeBridge for UnwiredMacImeBridge {
     fn start_composition(&self) -> Result<()> {
         Err(VoiceInputError::Injection(
-            "macOS InputMethodKit 桥接尚未接入".to_string(),
+            "macOS 注入桥接尚未接入".to_string(),
         ))
     }
 
     fn update_preedit(&self, _text: &str) -> Result<()> {
         Err(VoiceInputError::Injection(
-            "macOS InputMethodKit 桥接尚未接入".to_string(),
+            "macOS 注入桥接尚未接入".to_string(),
         ))
     }
 
     fn commit_text(&self, _text: &str) -> Result<()> {
         Err(VoiceInputError::Injection(
-            "macOS InputMethodKit 桥接尚未接入".to_string(),
+            "macOS 注入桥接尚未接入".to_string(),
         ))
     }
 
     fn cancel_composition(&self) -> Result<()> {
         Err(VoiceInputError::Injection(
-            "macOS InputMethodKit 桥接尚未接入".to_string(),
+            "macOS 注入桥接尚未接入".to_string(),
         ))
     }
 
     fn end_composition(&self) -> Result<()> {
         Err(VoiceInputError::Injection(
-            "macOS InputMethodKit 桥接尚未接入".to_string(),
+            "macOS 注入桥接尚未接入".to_string(),
         ))
     }
 }

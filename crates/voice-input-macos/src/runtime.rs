@@ -26,16 +26,9 @@ mod mac_runtime {
 
     use crate::bridge::{ClipboardMacImeBridge, MacImeBridge};
     use crate::host::{MacHostConfig, MacInputMethodHost};
-    use crate::imk::InputMethodKitMacImeBridge;
     use crate::recorder::MicAudioRecorder;
     use voice_input_asr::{FunAsrConfig, PythonFunAsrRunner};
     use voice_input_core::{AppConfig, AppController, MockHotkeyManager, Result, VoiceInputError};
-
-    #[derive(Debug, Clone)]
-    pub enum MacCommitBackend {
-        Clipboard,
-        InputMethodKit,
-    }
 
     #[derive(Debug, Clone)]
     pub struct MacLiveAppConfig {
@@ -44,7 +37,6 @@ mod mac_runtime {
         pub asr: FunAsrConfig,
         pub max_recording_duration: Duration,
         pub show_status_item: bool,
-        pub commit_backend: MacCommitBackend,
     }
 
     impl Default for MacLiveAppConfig {
@@ -55,7 +47,6 @@ mod mac_runtime {
                 asr: FunAsrConfig::from_env(),
                 max_recording_duration: Duration::from_secs(12),
                 show_status_item: true,
-                commit_backend: MacCommitBackend::Clipboard,
             }
         }
     }
@@ -227,10 +218,7 @@ mod mac_runtime {
             println!("说明：按一次开始录音，按一次停止并转写");
 
             let recorder = MicAudioRecorder::new(config.max_recording_duration);
-            let bridge: Box<dyn MacImeBridge> = match config.commit_backend {
-                MacCommitBackend::Clipboard => Box::new(ClipboardMacImeBridge::default()),
-                MacCommitBackend::InputMethodKit => Box::new(InputMethodKitMacImeBridge::default()),
-            };
+            let bridge: Box<dyn MacImeBridge> = Box::new(ClipboardMacImeBridge::default());
             let host = MacInputMethodHost::new_with_bridge(config.host.clone(), bridge);
             println!("正在预加载 ASR 模型...");
             let asr_runner = PythonFunAsrRunner::connect(config.asr.clone())?;
@@ -375,7 +363,7 @@ mod mac_runtime {
 }
 
 #[cfg(target_os = "macos")]
-pub use mac_runtime::{run_live_app, MacCommitBackend, MacLiveAppConfig};
+pub use mac_runtime::{run_live_app, MacLiveAppConfig};
 
 #[cfg(not(target_os = "macos"))]
 use voice_input_core::Result;

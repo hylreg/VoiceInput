@@ -604,6 +604,10 @@ impl FunAsrRunner for PythonFunAsrRunner {
             .map_err(|e| VoiceInputError::Transcription(format!("写入临时音频文件失败：{e}")))?;
 
         if request.config.is_qwen() {
+            let qwen_language = request
+                .config
+                .qwen_language()
+                .unwrap_or_else(|| request.config.language.clone());
             let output = if self.python_bin == "uv" {
                 Command::new(&self.python_bin)
                     .arg("run")
@@ -614,7 +618,7 @@ impl FunAsrRunner for PythonFunAsrRunner {
                     .arg(&request.config.model_dir)
                     .arg(audio_file.path())
                     .arg(&request.config.device)
-                    .arg(&request.config.language)
+                    .arg(&qwen_language)
                     .output()
                     .map_err(|e| {
                         VoiceInputError::Transcription(format!(
@@ -628,7 +632,7 @@ impl FunAsrRunner for PythonFunAsrRunner {
                     .arg(&request.config.model_dir)
                     .arg(audio_file.path())
                     .arg(&request.config.device)
-                    .arg(&request.config.language)
+                    .arg(&qwen_language)
                     .output()
                     .map_err(|e| {
                         VoiceInputError::Transcription(format!(
