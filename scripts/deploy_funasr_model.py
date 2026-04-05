@@ -2,8 +2,8 @@
 """
 Download a supported local ASR model into the cache dir.
 
-FunASR and Qwen/Qwen3-ASR-1.7B are fetched from ModelScope. The local cache
-keeps the runtime offline-friendly after the first download.
+FunASR and Qwen/Qwen3-ASR are fetched from ModelScope. The local cache keeps
+the runtime offline-friendly after the first download.
 """
 
 from __future__ import annotations
@@ -236,6 +236,15 @@ def default_revision_for_backend(backend: str) -> str | None:
     return DEFAULT_REVISION_BY_BACKEND.get(backend, "main")
 
 
+def default_local_dir_for_model_id(model_id: str) -> Path:
+    normalized = model_id.strip().lower()
+    if "qwen/qwen3-asr-0.6b" in normalized:
+        return Path("./models/Qwen/Qwen3-ASR-0.6B")
+    if "qwen/qwen3-asr" in normalized:
+        return Path("./models/Qwen/Qwen3-ASR-1.7B")
+    return DEFAULT_LOCAL_DIR_BY_BACKEND["funasr"]
+
+
 def main() -> int:
     args = parse_args()
     if args.model and args.backend and args.model != args.backend:
@@ -269,8 +278,12 @@ def main() -> int:
 
     if args.local_dir:
         local_dir = Path(args.local_dir)
+    elif args.model_id:
+        local_dir = default_local_dir_for_model_id(args.model_id)
     elif cli_backend is None and ENV_LOCAL_DIR:
         local_dir = Path(ENV_LOCAL_DIR)
+    elif ENV_MODEL_ID:
+        local_dir = default_local_dir_for_model_id(ENV_MODEL_ID)
     else:
         local_dir = Path(DEFAULT_LOCAL_DIR_BY_BACKEND[backend])
 

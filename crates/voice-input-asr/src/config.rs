@@ -70,8 +70,22 @@ impl FunAsrConfig {
         Self {
             backend: AsrBackend::QwenAsr,
             model_id: "Qwen/Qwen3-ASR-1.7B".to_string(),
-            source_url: "https://huggingface.co/Qwen/Qwen3-ASR-1.7B".to_string(),
+            source_url: "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR".to_string(),
             model_dir: PathBuf::from("./models/Qwen/Qwen3-ASR-1.7B"),
+            remote_code: PathBuf::new(),
+            device: "auto".to_string(),
+            language: "中文".to_string(),
+            itn: true,
+            hotwords: Vec::new(),
+        }
+    }
+
+    pub fn qwen3_asr_0_6b_default() -> Self {
+        Self {
+            backend: AsrBackend::QwenAsr,
+            model_id: "Qwen/Qwen3-ASR-0.6B".to_string(),
+            source_url: "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR".to_string(),
+            model_dir: PathBuf::from("./models/Qwen/Qwen3-ASR-0.6B"),
             remote_code: PathBuf::new(),
             device: "auto".to_string(),
             language: "中文".to_string(),
@@ -89,7 +103,11 @@ impl FunAsrConfig {
                 config
             }
             AsrBackend::QwenAsr => {
-                let mut config = Self::qwen3_asr_1_7b_default();
+                let mut config = if model_id.to_ascii_lowercase().contains("qwen/qwen3-asr-0.6b") {
+                    Self::qwen3_asr_0_6b_default()
+                } else {
+                    Self::qwen3_asr_1_7b_default()
+                };
                 config.model_id = model_id;
                 config
             }
@@ -110,6 +128,9 @@ impl FunAsrConfig {
                 }
                 "qwen" | "qwen3" | "qwen-asr" => {
                     config = Self::qwen3_asr_1_7b_default();
+                }
+                "qwen-0.6b" | "qwen0.6b" | "qwen06" | "qwen3-0.6b" | "qwen3-asr-0.6b" => {
+                    config = Self::qwen3_asr_0_6b_default();
                 }
                 _ => {}
             }

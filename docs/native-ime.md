@@ -105,7 +105,8 @@ Python 环境：
 - ModelScope 模型页：`https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512`
 - 默认本地缓存目录：`./models/FunAudioLLM/Fun-ASR-Nano-2512`
 - 也兼容 Qwen 模型：`Qwen/Qwen3-ASR-1.7B`，缓存到 `./models/Qwen/Qwen3-ASR-1.7B`
-- 仓库级配置模板是 [`config/voiceinput.env`](../config/voiceinput.env)，里面放了 FunASR 和 Qwen 两个可切换模板；它本身不再固定默认模型。真要选模型时，优先用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen>`
+- 另外也支持 `Qwen/Qwen3-ASR-0.6B`，缓存到 `./models/Qwen/Qwen3-ASR-0.6B`
+- 仓库级配置模板是 [`config/voiceinput.env`](../config/voiceinput.env)，里面放了 FunASR、Qwen 1.7B 和 Qwen 0.6B 三个可切换模板；它本身不再固定默认模型。真要选模型时，优先用 `scripts/voiceinput.sh ... --model ...`，要把默认写回仓库配置时用 `scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>`
 - 统一入口是 [`scripts/voiceinput.sh`](../scripts/voiceinput.sh)，比如 `scripts/voiceinput.sh bootstrap`、`scripts/voiceinput.sh macos install`
 - 旧脚本现在主要是兼容壳，方便你继续使用原来的命令名
 - `voice-input-asr` 里的 Python runner 会根据 `FunAsrConfig` 的 `backend` 选择 FunASR 或 Qwen 路径；FunASR 会使用 `remote_code`、`device`、`language` 和 `itn`，Qwen 会优先使用 `model_id`、`device` 和 `language`
@@ -120,11 +121,13 @@ Python 环境：
 4. `uv pip install -r scripts/requirements-asr-base.txt`
 5. `uv pip install -r scripts/requirements-asr-runtime.txt`
 6. `uv run -- python scripts/deploy_funasr_model.py --skip-existing`
-7. 如果要部署 Qwen 模型，可以运行 `uv run -- python scripts/deploy_funasr_model.py --backend qwen --model-id Qwen/Qwen3-ASR-1.7B --skip-existing`
-8. 确认模型目录存在于 `./models/FunAudioLLM/Fun-ASR-Nano-2512`，或者 Qwen 的 `./models/Qwen/Qwen3-ASR-1.7B`
-9. `scripts/voiceinput.sh bootstrap` 内部会先装 base 和 runtime，再部署模型，这样 Mac 上能正确检测 MPS
-10. `scripts/voiceinput.sh bootstrap --model qwen` 会直接走 Qwen 的下载和部署路径，`--backend qwen` 也兼容
-11. 统一入口可写成 `scripts/voiceinput.sh bootstrap --model qwen`
+7. 如果要部署 Qwen 1.7B 模型，可以运行 `uv run -- python scripts/deploy_funasr_model.py --backend qwen --model-id Qwen/Qwen3-ASR-1.7B --skip-existing`
+8. 如果要部署 Qwen 0.6B 模型，可以运行 `uv run -- python scripts/deploy_funasr_model.py --backend qwen --model-id Qwen/Qwen3-ASR-0.6B --skip-existing`
+9. 确认模型目录存在于 `./models/FunAudioLLM/Fun-ASR-Nano-2512`，或者 Qwen 的 `./models/Qwen/Qwen3-ASR-1.7B` / `./models/Qwen/Qwen3-ASR-0.6B`
+10. `scripts/voiceinput.sh bootstrap` 内部会先装 base 和 runtime，再部署模型，这样 Mac 上能正确检测 MPS
+11. `scripts/voiceinput.sh bootstrap --model qwen` 会直接走 Qwen 1.7B 的下载和部署路径，`--backend qwen` 也兼容
+12. `scripts/voiceinput.sh bootstrap --model qwen-0.6b` 会直接走 Qwen 0.6B 的下载和部署路径
+13. 统一入口可写成 `scripts/voiceinput.sh bootstrap --model qwen`
 
 ### 系统级安装
 

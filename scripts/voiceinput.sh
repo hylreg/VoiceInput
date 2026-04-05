@@ -177,10 +177,98 @@ voiceinput_normalize_model_choice() {
     qwen|qwen3|qwen-asr)
       printf '%s\n' "qwen"
       ;;
+    qwen-0.6b|qwen0.6b|qwen06|qwen3-0.6b|qwen3-asr-0.6b)
+      printf '%s\n' "qwen-0.6b"
+      ;;
     *)
       return 1
       ;;
   esac
+}
+
+voiceinput_model_backend_for_choice() {
+  local choice
+  choice="$(voiceinput_normalize_model_choice "${1:-}")" || return 1
+
+  case "$choice" in
+    funasr)
+      printf '%s\n' "funasr"
+      ;;
+    qwen|qwen-0.6b)
+      printf '%s\n' "qwen"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+voiceinput_model_id_for_choice() {
+  local choice
+  choice="$(voiceinput_normalize_model_choice "${1:-}")" || return 1
+
+  case "$choice" in
+    funasr)
+      printf '%s\n' "FunAudioLLM/Fun-ASR-Nano-2512"
+      ;;
+    qwen)
+      printf '%s\n' "Qwen/Qwen3-ASR-1.7B"
+      ;;
+    qwen-0.6b)
+      printf '%s\n' "Qwen/Qwen3-ASR-0.6B"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+voiceinput_model_source_url_for_choice() {
+  local choice
+  choice="$(voiceinput_normalize_model_choice "${1:-}")" || return 1
+
+  case "$choice" in
+    funasr)
+      printf '%s\n' "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
+      ;;
+    qwen|qwen-0.6b)
+      printf '%s\n' "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+voiceinput_model_local_dir_for_choice() {
+  local choice
+  choice="$(voiceinput_normalize_model_choice "${1:-}")" || return 1
+
+  case "$choice" in
+    funasr)
+      printf '%s\n' "./models/FunAudioLLM/Fun-ASR-Nano-2512"
+      ;;
+    qwen)
+      printf '%s\n' "./models/Qwen/Qwen3-ASR-1.7B"
+      ;;
+    qwen-0.6b)
+      printf '%s\n' "./models/Qwen/Qwen3-ASR-0.6B"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+voiceinput_apply_model_choice_env() {
+  local choice
+  choice="$(voiceinput_normalize_model_choice "${1:-}")" || return 1
+
+  export VOICEINPUT_ASR_MODEL="$choice"
+  export VOICEINPUT_ASR_BACKEND="$(voiceinput_model_backend_for_choice "$choice")"
+  export VOICEINPUT_ASR_MODEL_ID="$(voiceinput_model_id_for_choice "$choice")"
+  export VOICEINPUT_ASR_SOURCE_URL="$(voiceinput_model_source_url_for_choice "$choice")"
+  export VOICEINPUT_ASR_MODEL_DIR="$(voiceinput_model_local_dir_for_choice "$choice")"
 }
 
 voiceinput_config_file_path() {
@@ -201,9 +289,9 @@ voiceinput_write_model_config() {
       cat >"$tmp_file" <<'EOF'
 # VoiceInput shared configuration template.
 # Shell scripts source this file before deploying models or launching runtime.
-#
-# Use `scripts/voiceinput.sh model qwen` or `scripts/voiceinput.sh model funasr`
-# to rewrite this file with a selected default model.
+# Use `scripts/voiceinput.sh model qwen`, `scripts/voiceinput.sh model qwen-0.6b`
+# or `scripts/voiceinput.sh model funasr` to rewrite this file with a selected
+# default model.
 # Command-line arguments and explicit environment variables still override it.
 #
 # Keep one preset block uncommented below if you want a local default.
@@ -234,15 +322,80 @@ export VOICEINPUT_ASR_HOTWORDS=""
 # export VOICEINPUT_ASR_LANGUAGE="中文"
 # export VOICEINPUT_ASR_ITN="true"
 # export VOICEINPUT_ASR_HOTWORDS=""
+
+## -------------------------------------------------------------------
+## Qwen 0.6B preset
+## -------------------------------------------------------------------
+# export VOICEINPUT_ASR_MODEL="qwen-0.6b"
+# export VOICEINPUT_ASR_BACKEND="qwen"
+# export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-0.6B"
+# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
+# export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-0.6B"
+# export VOICEINPUT_ASR_DEVICE="auto"
+# export VOICEINPUT_ASR_LANGUAGE="中文"
+# export VOICEINPUT_ASR_ITN="true"
+# export VOICEINPUT_ASR_HOTWORDS=""
+EOF
+      ;;
+    qwen-0.6b)
+      cat >"$tmp_file" <<'EOF'
+# VoiceInput shared configuration template.
+# Shell scripts source this file before deploying models or launching runtime.
+# Use `scripts/voiceinput.sh model qwen`, `scripts/voiceinput.sh model qwen-0.6b`
+# or `scripts/voiceinput.sh model funasr` to rewrite this file with a selected
+# default model.
+# Command-line arguments and explicit environment variables still override it.
+#
+# Keep one preset block uncommented below if you want a local default.
+
+## -------------------------------------------------------------------
+## FunASR preset
+## -------------------------------------------------------------------
+# export VOICEINPUT_ASR_MODEL="funasr"
+# export VOICEINPUT_ASR_BACKEND="funasr"
+# export VOICEINPUT_ASR_MODEL_ID="FunAudioLLM/Fun-ASR-Nano-2512"
+# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
+# export VOICEINPUT_ASR_MODEL_DIR="./models/FunAudioLLM/Fun-ASR-Nano-2512"
+# export VOICEINPUT_ASR_REMOTE_CODE="./models/FunAudioLLM/Fun-ASR-Nano-2512/model.py"
+# export VOICEINPUT_ASR_DEVICE="auto"
+# export VOICEINPUT_ASR_LANGUAGE="中文"
+# export VOICEINPUT_ASR_ITN="true"
+# export VOICEINPUT_ASR_HOTWORDS=""
+
+## -------------------------------------------------------------------
+## Qwen preset
+## -------------------------------------------------------------------
+# export VOICEINPUT_ASR_MODEL="qwen"
+# export VOICEINPUT_ASR_BACKEND="qwen"
+# export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-1.7B"
+# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
+# export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-1.7B"
+# export VOICEINPUT_ASR_DEVICE="auto"
+# export VOICEINPUT_ASR_LANGUAGE="中文"
+# export VOICEINPUT_ASR_ITN="true"
+# export VOICEINPUT_ASR_HOTWORDS=""
+
+## -------------------------------------------------------------------
+## Qwen 0.6B preset
+## -------------------------------------------------------------------
+export VOICEINPUT_ASR_MODEL="qwen-0.6b"
+export VOICEINPUT_ASR_BACKEND="qwen"
+export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-0.6B"
+export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
+export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-0.6B"
+export VOICEINPUT_ASR_DEVICE="auto"
+export VOICEINPUT_ASR_LANGUAGE="中文"
+export VOICEINPUT_ASR_ITN="true"
+export VOICEINPUT_ASR_HOTWORDS=""
 EOF
       ;;
     qwen)
       cat >"$tmp_file" <<'EOF'
 # VoiceInput shared configuration template.
 # Shell scripts source this file before deploying models or launching runtime.
-#
-# Use `scripts/voiceinput.sh model qwen` or `scripts/voiceinput.sh model funasr`
-# to rewrite this file with a selected default model.
+# Use `scripts/voiceinput.sh model qwen`, `scripts/voiceinput.sh model qwen-0.6b`
+# or `scripts/voiceinput.sh model funasr` to rewrite this file with a selected
+# default model.
 # Command-line arguments and explicit environment variables still override it.
 #
 # Keep one preset block uncommented below if you want a local default.
@@ -273,6 +426,19 @@ export VOICEINPUT_ASR_DEVICE="auto"
 export VOICEINPUT_ASR_LANGUAGE="中文"
 export VOICEINPUT_ASR_ITN="true"
 export VOICEINPUT_ASR_HOTWORDS=""
+
+## -------------------------------------------------------------------
+## Qwen 0.6B preset
+## -------------------------------------------------------------------
+# export VOICEINPUT_ASR_MODEL="qwen-0.6b"
+# export VOICEINPUT_ASR_BACKEND="qwen"
+# export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-0.6B"
+# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
+# export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-0.6B"
+# export VOICEINPUT_ASR_DEVICE="auto"
+# export VOICEINPUT_ASR_LANGUAGE="中文"
+# export VOICEINPUT_ASR_ITN="true"
+# export VOICEINPUT_ASR_HOTWORDS=""
 EOF
       ;;
   esac
@@ -297,7 +463,7 @@ voiceinput_model_impl() {
       --help|-h)
         cat >&2 <<'EOF'
 用法：
-  scripts/voiceinput.sh model <funasr|qwen> [--config-file /path/to/voiceinput.env]
+  scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b> [--config-file /path/to/voiceinput.env]
 
 说明：
   - 这个命令会把仓库级配置文件写成你选定的默认模型
@@ -318,7 +484,7 @@ EOF
   done
 
   if [[ -z "$model" ]]; then
-    echo "用法：scripts/voiceinput.sh model <funasr|qwen> [--config-file /path/to/voiceinput.env]" >&2
+    echo "用法：scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b> [--config-file /path/to/voiceinput.env]" >&2
     exit 2
   fi
 
@@ -346,7 +512,24 @@ voiceinput_bootstrap_impl() {
           exit 2
         fi
         if [[ "$1" == "--model" ]]; then
-          deploy_args+=("--backend" "$2")
+          local normalized_model
+          if ! normalized_model="$(voiceinput_normalize_model_choice "$2")"; then
+            echo "不支持的模型：$2" >&2
+            exit 2
+          fi
+          case "$normalized_model" in
+            qwen-0.6b)
+              deploy_args+=(
+                "--backend" "$(voiceinput_model_backend_for_choice "$normalized_model")"
+                "--model-id" "$(voiceinput_model_id_for_choice "$normalized_model")"
+                "--source-url" "$(voiceinput_model_source_url_for_choice "$normalized_model")"
+                "--local-dir" "$(voiceinput_model_local_dir_for_choice "$normalized_model")"
+              )
+              ;;
+            *)
+              deploy_args+=("--backend" "$2")
+              ;;
+          esac
         else
           deploy_args+=("$1" "$2")
         fi
@@ -372,7 +555,7 @@ voiceinput_bootstrap_impl() {
   - 部署参数会原样传给 deploy_funasr_model.py
 
 常用部署参数：
-  --model funasr|qwen
+  --model funasr|qwen|qwen-0.6b
   --backend funasr|qwen
   --model-id
   --source-url
@@ -382,6 +565,9 @@ voiceinput_bootstrap_impl() {
   --install-cuda
   --device auto|cpu|cuda|mps
   --cuda-wheel-index
+
+说明：
+  - `--model qwen-0.6b` 会写入 Qwen3-ASR-0.6B 的模型 ID、来源和目录
 EOF
         exit 0
         ;;
@@ -489,17 +675,10 @@ voiceinput_linux_smoke_impl() {
           echo "缺少 --model 的值" >&2
           exit 2
         fi
-        case "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" in
-          funasr|fun)
-            export VOICEINPUT_ASR_MODEL="funasr"
-            ;;
-          qwen|qwen3|qwen-asr)
-            export VOICEINPUT_ASR_MODEL="qwen"
-            ;;
-          *)
-            export VOICEINPUT_ASR_MODEL="$2"
-            ;;
-        esac
+        if ! voiceinput_apply_model_choice_env "$2"; then
+          echo "不支持的模型：$2" >&2
+          exit 2
+        fi
         shift 2
         ;;
       --backend)
@@ -514,13 +693,13 @@ voiceinput_linux_smoke_impl() {
       --help|-h)
         cat >&2 <<'EOF'
 用法：
-  scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav [--model funasr|qwen] [--backend ibus|fcitx5]
+  scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav [--model funasr|qwen|qwen-0.6b] [--backend ibus|fcitx5]
 
 说明：
   - 默认使用 IBus
   - 需要先准备好 Python ASR 环境和本地模型
   - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
-  - `--model` 只影响 ASR 模型选择，会通过环境变量传给运行时
+  - `--model` 会通过环境变量传给运行时，`qwen-0.6b` 也可用
 EOF
         exit 0
         ;;
@@ -532,7 +711,7 @@ EOF
   done
 
   if [[ -z "$audio_file" ]]; then
-    echo "用法：scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav [--model funasr|qwen] [--backend ibus|fcitx5]" >&2
+    echo "用法：scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav [--model funasr|qwen|qwen-0.6b] [--backend ibus|fcitx5]" >&2
     exit 2
   fi
 
@@ -555,7 +734,24 @@ voiceinput_macos_install_impl() {
             echo "缺少 $1 的值" >&2
             exit 2
           fi
-          bootstrap_args+=("--backend" "$2")
+          local normalized_model
+          if ! normalized_model="$(voiceinput_normalize_model_choice "$2")"; then
+            echo "不支持的模型：$2" >&2
+            exit 2
+          fi
+          case "$normalized_model" in
+            qwen-0.6b)
+              bootstrap_args+=(
+                "--backend" "$(voiceinput_model_backend_for_choice "$normalized_model")"
+                "--model-id" "$(voiceinput_model_id_for_choice "$normalized_model")"
+                "--source-url" "$(voiceinput_model_source_url_for_choice "$normalized_model")"
+                "--local-dir" "$(voiceinput_model_local_dir_for_choice "$normalized_model")"
+              )
+              ;;
+            *)
+              bootstrap_args+=("--backend" "$2")
+              ;;
+          esac
           shift 2
           continue
         fi
@@ -598,7 +794,7 @@ voiceinput_macos_install_impl() {
   - 如果传入 --audio-file，会在安装后自动运行一次 smoke 验证
   - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
   - 可选 ASR 部署参数会原样传给 scripts/voiceinput.sh bootstrap
-  - `--model funasr|qwen` 是 `--backend funasr|qwen` 的别名
+  - `--model funasr|qwen|qwen-0.6b` 会分别选择 FunASR、Qwen 1.7B、Qwen 0.6B
 EOF
         exit 0
         ;;
@@ -668,7 +864,24 @@ voiceinput_linux_install_impl() {
           echo "缺少 --model 的值" >&2
           exit 2
         fi
-        deploy_args+=("$1" "$2")
+        local normalized_model
+        if ! normalized_model="$(voiceinput_normalize_model_choice "$2")"; then
+          echo "不支持的模型：$2" >&2
+          exit 2
+        fi
+        case "$normalized_model" in
+          qwen-0.6b)
+            deploy_args+=(
+              "--backend" "$(voiceinput_model_backend_for_choice "$normalized_model")"
+              "--model-id" "$(voiceinput_model_id_for_choice "$normalized_model")"
+              "--source-url" "$(voiceinput_model_source_url_for_choice "$normalized_model")"
+              "--local-dir" "$(voiceinput_model_local_dir_for_choice "$normalized_model")"
+            )
+            ;;
+          *)
+            deploy_args+=("$1" "$2")
+            ;;
+        esac
         shift 2
         ;;
       --no-launch)
@@ -678,7 +891,7 @@ voiceinput_linux_install_impl() {
       --help|-h)
         cat >&2 <<'EOF'
 用法：
-  scripts/voiceinput.sh linux install [--backend ibus|fcitx5] [--model funasr|qwen] [--audio-file /path/to/audio.wav]
+  scripts/voiceinput.sh linux install [--backend ibus|fcitx5] [--model funasr|qwen|qwen-0.6b] [--audio-file /path/to/audio.wav]
 
 说明：
   - 默认先执行 Linux bootstrap，准备 Python 环境并下载模型
@@ -688,6 +901,7 @@ voiceinput_linux_install_impl() {
   - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
   - --backend 只影响 Linux 常驻版 / smoke 的宿主后端
   - --model 会原样传给 scripts/voiceinput.sh bootstrap，用来选择 ASR 模型
+  - `--model qwen-0.6b` 会切到 Qwen3-ASR-0.6B
 EOF
         exit 0
         ;;

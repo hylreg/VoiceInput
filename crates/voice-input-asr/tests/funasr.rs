@@ -35,10 +35,29 @@ fn qwen_config_uses_qwen_defaults() {
     let config = FunAsrConfig::qwen3_asr_1_7b_default();
 
     assert_eq!(config.model_id, "Qwen/Qwen3-ASR-1.7B");
-    assert_eq!(config.source_url, "https://huggingface.co/Qwen/Qwen3-ASR-1.7B");
+    assert_eq!(
+        config.source_url,
+        "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
+    );
     assert_eq!(
         config.model_dir,
         std::path::PathBuf::from("./models/Qwen/Qwen3-ASR-1.7B")
+    );
+    assert!(config.is_qwen());
+}
+
+#[test]
+fn qwen_0_6b_config_uses_qwen_defaults() {
+    let config = FunAsrConfig::qwen3_asr_0_6b_default();
+
+    assert_eq!(config.model_id, "Qwen/Qwen3-ASR-0.6B");
+    assert_eq!(
+        config.source_url,
+        "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
+    );
+    assert_eq!(
+        config.model_dir,
+        std::path::PathBuf::from("./models/Qwen/Qwen3-ASR-0.6B")
     );
     assert!(config.is_qwen());
 }
