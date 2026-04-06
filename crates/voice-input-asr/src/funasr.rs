@@ -468,7 +468,12 @@ print(text.strip())
 fn python_command(python_bin: &str, script: &str) -> Command {
     if python_bin == "uv" {
         let mut command = Command::new(python_bin);
-        command.arg("run").arg("--").arg("python").arg("-c").arg(script);
+        command
+            .arg("run")
+            .arg("--")
+            .arg("python")
+            .arg("-c")
+            .arg(script);
         command
     } else {
         let mut command = Command::new(python_bin);
@@ -678,9 +683,9 @@ impl FunAsrRunner for PythonFunAsrRunner {
             .map_err(|e| VoiceInputError::Transcription(format!("写入临时音频文件失败：{e}")))?;
 
         if let Some(worker) = &self.worker {
-            let mut worker = worker.lock().map_err(|_| {
-                VoiceInputError::Transcription("锁定 ASR worker 失败".to_string())
-            })?;
+            let mut worker = worker
+                .lock()
+                .map_err(|_| VoiceInputError::Transcription("锁定 ASR worker 失败".to_string()))?;
             return worker.transcribe(audio_file.path(), &request);
         }
 
@@ -754,9 +759,7 @@ impl FunAsrRunner for PythonFunAsrRunner {
                 .arg(hotwords_json)
                 .output()
                 .map_err(|e| {
-                    VoiceInputError::Transcription(format!(
-                        "通过 uv 启动 ASR Python 进程失败：{e}"
-                    ))
+                    VoiceInputError::Transcription(format!("通过 uv 启动 ASR Python 进程失败：{e}"))
                 })?
         } else {
             Command::new(&self.python_bin)
@@ -1279,7 +1282,10 @@ for line in sys.stdin:
 
         let ready = serde_json::from_str::<serde_json::Value>(ready_line.trim())
             .expect("parse worker ready line");
-        assert_eq!(ready.get("ready").and_then(|value| value.as_bool()), Some(true));
+        assert_eq!(
+            ready.get("ready").and_then(|value| value.as_bool()),
+            Some(true)
+        );
 
         PythonFunAsrWorker {
             child,

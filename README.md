@@ -11,12 +11,12 @@
 3. 提交最终文本
 4. 出错时干净地取消
 
-共享 Rust core 负责这条流程，各个平台宿主负责把它翻译成原生输入法 API。macOS 这条线已经能完成热键触发、录音、转写和文本注入的闭环。
+共享 Rust core 负责这条流程，各个平台宿主负责把它翻译成原生输入法 API。macOS 这条线已经能完成热键触发、录音、转写和文本注入的闭环；Windows 现在先补上了本地 ASR + 文本直接注入 / 剪贴板回退的兼容路径。
 
 ## 平台目标
 
 - macOS: 常驻 app + Accessibility / Unicode / 剪贴板注入
-- Windows: `TSF` 和 `COM`
+- Windows: `TSF` 和 `COM`，当前先提供直接注入 + 剪贴板回退兼容层
 - Linux: `IBus` 或 `Fcitx5`
 
 ## 已实现内容
@@ -34,6 +34,9 @@
 - Linux host crate，拆分了 IBus/Fcitx5 后端与 IBus bridge 层
 - Linux IBus 路径绑定到 `ibus` crate + D-Bus 抽象
 - IBus bridge 已接上真实 `ibus` crate API
+- Windows host crate，已提供全局热键、麦克风录音、文本直接注入、剪贴板回退和 smoke 路径
+- Windows smoke：`scripts/voiceinput.sh windows smoke --audio-file testdata/smoke.wav`
+- Windows 常驻 app：`scripts/voiceinput.sh windows install`
 - 本地 ASR 默认使用 `Qwen/Qwen3-ASR-0.6B`
 - 模型部署脚本：[`scripts/deploy_funasr_model.py`](./scripts/deploy_funasr_model.py)
 - Python 依赖使用本地 `.venv` 和 `uv` 管理
@@ -69,7 +72,8 @@ scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>
 
 1. `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav`
 2. `scripts/voiceinput.sh linux smoke --audio-file testdata/smoke.wav`
-3. 需要时直接看终端日志
+3. `scripts/voiceinput.sh windows smoke --audio-file testdata/smoke.wav`
+4. 需要时直接看终端日志
 
 ## 模型部署
 
@@ -109,3 +113,13 @@ scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>
 6. Linux 默认热键现在和 macOS 一样，是 `Ctrl+Shift+Space`
 7. 如果要切模型，可以加 `--model qwen` 或 `--model qwen-0.6b`
 8. `--backend` 只影响 Linux 宿主后端
+
+## Windows 快速开始
+
+1. 先准备 Rust、Python 和 `uv`
+2. `scripts/voiceinput.sh bootstrap`
+3. `scripts/voiceinput.sh windows smoke --audio-file testdata/smoke.wav`
+4. `scripts/voiceinput.sh windows install`
+5. Windows 默认热键是 `Ctrl+Shift+Space`
+6. 当前 Windows 路径会优先直接输入文本，失败时回退到系统剪贴板粘贴
+7. `TSF/COM` 原生输入法宿主还没接入，当前常驻版还是热键驱动的兼容层

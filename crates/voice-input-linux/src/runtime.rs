@@ -78,9 +78,9 @@ mod linux_runtime {
         let status = Command::new("xdotool")
             .args(["type", "--clearmodifiers", "--delay", "0", RECORDING_MARKER])
             .status()
-            .map_err(|e| voice_input_core::VoiceInputError::Injection(format!(
-                "调用 xdotool 失败：{e}"
-            )))?;
+            .map_err(|e| {
+                voice_input_core::VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))
+            })?;
 
         if !status.success() {
             return Err(voice_input_core::VoiceInputError::Injection(format!(

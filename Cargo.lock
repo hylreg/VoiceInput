@@ -1673,6 +1673,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "voice-input-windows"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "cpal",
+ "hound",
+ "voice-input-asr",
+ "voice-input-core",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

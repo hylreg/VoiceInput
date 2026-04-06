@@ -379,7 +379,10 @@ pub fn insert_text_into_active_window(text: &str) -> Result<()> {
 
     thread::sleep(Duration::from_millis(40));
 
-    for shortcut in [["key", "--clearmodifiers", "Shift+Insert"], ["key", "--clearmodifiers", "ctrl+v"]] {
+    for shortcut in [
+        ["key", "--clearmodifiers", "Shift+Insert"],
+        ["key", "--clearmodifiers", "ctrl+v"],
+    ] {
         let status = Command::new("xdotool")
             .args(shortcut)
             .status()

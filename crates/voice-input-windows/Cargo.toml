@@ -1,0 +1,14 @@
+[package]
+name = "voice-input-windows"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+voice-input-core = { path = "../voice-input-core" }
+voice-input-asr = { path = "../voice-input-asr" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+arboard = "3.6"
+cpal = "0.16"
+hound = "3.5"
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }

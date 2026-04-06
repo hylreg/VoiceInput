@@ -73,6 +73,12 @@ fn demo_pipeline_cancels_composition_on_failure() {
     ));
     assert_eq!(
         ime.events(),
-        vec!["开始输入", "显示录音标记", "清除录音标记", "取消输入", "结束输入"]
+        vec![
+            "开始输入",
+            "显示录音标记",
+            "清除录音标记",
+            "取消输入",
+            "结束输入"
+        ]
     );
 }

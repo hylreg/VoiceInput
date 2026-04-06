@@ -103,7 +103,10 @@ impl FunAsrConfig {
                 config
             }
             AsrBackend::QwenAsr => {
-                let mut config = if model_id.to_ascii_lowercase().contains("qwen/qwen3-asr-0.6b") {
+                let mut config = if model_id
+                    .to_ascii_lowercase()
+                    .contains("qwen/qwen3-asr-0.6b")
+                {
                     Self::qwen3_asr_0_6b_default()
                 } else {
                     Self::qwen3_asr_1_7b_default()
@@ -167,7 +170,10 @@ impl FunAsrConfig {
             config.language = language;
         }
         if let Ok(itn) = env::var("VOICEINPUT_ASR_ITN") {
-            config.itn = !matches!(itn.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no");
+            config.itn = !matches!(
+                itn.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no"
+            );
         }
         if let Ok(hotwords) = env::var("VOICEINPUT_ASR_HOTWORDS") {
             config.hotwords = hotwords

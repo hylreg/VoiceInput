@@ -24,9 +24,9 @@ mod mac_runtime {
         CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
         CGEventType, EventField, KeyCode,
     };
+    use fs2::FileExt;
     use objc::runtime::Class;
     use objc::{msg_send, sel, sel_impl};
-    use fs2::FileExt;
 
     use crate::bridge::{ClipboardMacImeBridge, MacImeBridge};
     use crate::host::{MacHostConfig, MacInputMethodHost};
@@ -78,24 +78,24 @@ mod mac_runtime {
                 .read(true)
                 .write(true)
                 .open(&lock_path)
-                .map_err(|e| VoiceInputError::Injection(format!(
-                    "创建 macOS 单实例锁失败 {}：{e}",
-                    lock_path.display()
-                )))?;
+                .map_err(|e| {
+                    VoiceInputError::Injection(format!(
+                        "创建 macOS 单实例锁失败 {}：{e}",
+                        lock_path.display()
+                    ))
+                })?;
 
             match lock_file.try_lock_exclusive() {
                 Ok(()) => {
                     let mut lock_file_for_pid = lock_file;
-                    lock_file_for_pid
-                        .set_len(0)
-                        .map_err(|e| VoiceInputError::Injection(format!(
-                            "清空 macOS 单实例锁失败：{e}"
-                        )))?;
+                    lock_file_for_pid.set_len(0).map_err(|e| {
+                        VoiceInputError::Injection(format!("清空 macOS 单实例锁失败：{e}"))
+                    })?;
                     lock_file_for_pid
                         .write_all(format!("pid={}\n", std::process::id()).as_bytes())
-                        .map_err(|e| VoiceInputError::Injection(format!(
-                            "写入 macOS 单实例锁失败：{e}"
-                        )))?;
+                        .map_err(|e| {
+                            VoiceInputError::Injection(format!("写入 macOS 单实例锁失败：{e}"))
+                        })?;
                     Ok(Some(Self {
                         _lock_file: lock_file_for_pid,
                     }))

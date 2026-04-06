@@ -738,6 +738,165 @@ EOF
   uv run -- "$cargo_bin" run -p voice-input-linux --features ibus -- "${smoke_args[@]}"
 }
 
+voiceinput_windows_smoke_impl() {
+  local audio_file=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --audio-file)
+        if [[ $# -lt 2 ]]; then
+          echo "缺少 --audio-file 的值" >&2
+          exit 2
+        fi
+        audio_file="$2"
+        shift 2
+        ;;
+      --model)
+        if [[ $# -lt 2 ]]; then
+          echo "缺少 --model 的值" >&2
+          exit 2
+        fi
+        if ! voiceinput_apply_model_choice_env "$2"; then
+          echo "不支持的模型：$2" >&2
+          exit 2
+        fi
+        shift 2
+        ;;
+      --help|-h)
+        cat >&2 <<'EOF'
+用法：
+  scripts/voiceinput.sh windows smoke --audio-file /path/to/audio.wav [--model funasr|qwen|qwen-0.6b]
+
+说明：
+  - 当前 Windows 路径会运行本地 ASR，并优先直接注入文本
+  - 如果直接注入失败，会回退到剪贴板粘贴
+  - 常驻热键和 TSF/COM 注入尚未接入
+  - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
+EOF
+        exit 0
+        ;;
+      *)
+        echo "不支持的参数：$1" >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  if [[ -z "$audio_file" ]]; then
+    echo "用法：scripts/voiceinput.sh windows smoke --audio-file /path/to/audio.wav [--model funasr|qwen|qwen-0.6b]" >&2
+    exit 2
+  fi
+
+  voiceinput_ensure_cargo
+  voiceinput_ensure_uv
+  cd "$REPO_ROOT"
+  local cargo_bin
+  cargo_bin="$(command -v cargo || true)"
+  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
+    cargo_bin="${HOME}/.cargo/bin/cargo"
+  fi
+  uv run -- "$cargo_bin" run -p voice-input-windows -- --audio-file "$audio_file"
+}
+
+voiceinput_windows_install_impl() {
+  local audio_file=""
+  local run_smoke_after_bootstrap=false
+  local run_live_app_after_bootstrap=true
+  local bootstrap_args=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --audio-file)
+        if [[ $# -lt 2 ]]; then
+          echo "缺少 --audio-file 的值" >&2
+          exit 2
+        fi
+        audio_file="$2"
+        run_smoke_after_bootstrap=true
+        run_live_app_after_bootstrap=false
+        shift 2
+        ;;
+      --model|--backend|--model-id|--source-url|--local-dir|--revision|--device|--cuda-wheel-index|--install-cuda|--skip-existing)
+        if [[ $# -lt 2 ]]; then
+          echo "缺少 $1 的值" >&2
+          exit 2
+        fi
+        if [[ "$1" == "--model" ]]; then
+          local normalized_model
+          if ! normalized_model="$(voiceinput_normalize_model_choice "$2")"; then
+            echo "不支持的模型：$2" >&2
+            exit 2
+          fi
+          case "$normalized_model" in
+            qwen-0.6b)
+              bootstrap_args+=(
+                "--backend" "$(voiceinput_model_backend_for_choice "$normalized_model")"
+                "--model-id" "$(voiceinput_model_id_for_choice "$normalized_model")"
+                "--source-url" "$(voiceinput_model_source_url_for_choice "$normalized_model")"
+                "--local-dir" "$(voiceinput_model_local_dir_for_choice "$normalized_model")"
+              )
+              ;;
+            *)
+              bootstrap_args+=("$1" "$2")
+              ;;
+          esac
+        else
+          bootstrap_args+=("$1" "$2")
+        fi
+        shift 2
+        ;;
+      --no-launch)
+        run_live_app_after_bootstrap=false
+        shift
+        ;;
+      --help|-h)
+        cat >&2 <<'EOF'
+用法：
+  scripts/voiceinput.sh windows install [--model funasr|qwen|qwen-0.6b] [--audio-file /path/to/audio.wav]
+
+说明：
+  - 默认先执行 bootstrap，准备 Python 环境并下载模型
+  - 然后启动 Windows 常驻版
+  - 如果传入 --audio-file，会在准备完成后自动跑一次 Windows smoke
+  - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
+  - 当前常驻版支持全局热键、麦克风录音和文本直接注入 / 剪贴板回退
+EOF
+        exit 0
+        ;;
+      *)
+        echo "不支持的参数：$1" >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  cd "$REPO_ROOT"
+  if ((${#bootstrap_args[@]} > 0)); then
+    voiceinput_bootstrap_impl "${bootstrap_args[@]}"
+  else
+    voiceinput_bootstrap_impl
+  fi
+
+  if [[ "$run_smoke_after_bootstrap" == true ]]; then
+    echo "正在运行 Windows smoke 验证"
+    voiceinput_windows_smoke_impl --audio-file "$audio_file"
+  fi
+
+  if [[ "$run_live_app_after_bootstrap" != true ]]; then
+    return 0
+  fi
+
+  echo "正在启动 Windows 常驻应用"
+  voiceinput_ensure_cargo
+  voiceinput_ensure_uv
+  local cargo_bin
+  cargo_bin="$(command -v cargo || true)"
+  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
+    cargo_bin="${HOME}/.cargo/bin/cargo"
+  fi
+  uv run -- "$cargo_bin" run -p voice-input-windows --bin voice-input-windows-app --release
+}
+
 voiceinput_macos_install_impl() {
   local audio_file=""
   local run_smoke_before_launch=false
@@ -1347,6 +1506,8 @@ usage() {
   linux smoke            运行 Linux smoke
   linux dev              启动 Linux 开发常驻服务
   linux dev-streaming    启动 Linux FunASR 流式开发服务
+  windows install        安装并启动 Windows 常驻版
+  windows smoke          运行 Windows smoke
 
 说明：
   - 所有子命令都会继续兼容现有脚本参数
@@ -1363,7 +1524,7 @@ fi
 
 shift || true
 
-if [[ "$cmd" == "macos" || "$cmd" == "linux" ]]; then
+if [[ "$cmd" == "macos" || "$cmd" == "linux" || "$cmd" == "windows" ]]; then
   platform="$cmd"
   action="${1:-}"
   if [[ -z "$action" || "$action" == "--help" || "$action" == "-h" ]]; then
@@ -1393,8 +1554,14 @@ fi
   linux-install)
     voiceinput_linux_install_impl "$@"
     ;;
+  windows-install)
+    voiceinput_windows_install_impl "$@"
+    ;;
   linux-smoke)
     voiceinput_linux_smoke_impl "$@"
+    ;;
+  windows-smoke)
+    voiceinput_windows_smoke_impl "$@"
     ;;
   macos-dev-install)
     voiceinput_dev_install_macos_impl "$@"

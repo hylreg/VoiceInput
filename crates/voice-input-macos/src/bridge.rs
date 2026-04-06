@@ -112,9 +112,10 @@ impl MacImeBridge for ClipboardMacImeBridge {
     }
 
     fn show_recording_indicator(&self) -> Result<()> {
-        let mut guard = self.recording_indicator_len.lock().map_err(|_| {
-            VoiceInputError::Injection("锁定 macOS 录音标记状态失败".to_string())
-        })?;
+        let mut guard = self
+            .recording_indicator_len
+            .lock()
+            .map_err(|_| VoiceInputError::Injection("锁定 macOS 录音标记状态失败".to_string()))?;
         if *guard > 0 {
             return Ok(());
         }
@@ -148,9 +149,10 @@ impl MacImeBridge for ClipboardMacImeBridge {
 
         send_backspace_events(marker_len)?;
 
-        let mut guard = self.recording_indicator_len.lock().map_err(|_| {
-            VoiceInputError::Injection("锁定 macOS 录音标记状态失败".to_string())
-        })?;
+        let mut guard = self
+            .recording_indicator_len
+            .lock()
+            .map_err(|_| VoiceInputError::Injection("锁定 macOS 录音标记状态失败".to_string()))?;
         *guard = 0;
         Ok(())
     }
