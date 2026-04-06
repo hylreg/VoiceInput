@@ -417,6 +417,7 @@ pub fn backspace_in_active_window(count: usize) -> Result<()> {
 }
 
 #[cfg(not(feature = "ibus"))]
+#[allow(dead_code)]
 pub fn backspace_in_active_window(_count: usize) -> Result<()> {
     Ok(())
 }

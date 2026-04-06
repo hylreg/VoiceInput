@@ -3,6 +3,12 @@ name = "voice-input-cli"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-voice-input-core = { path = "../voice-input-core" }
+[features]
+default = []
+linux-ibus-smoke = ["voice-input-linux/ibus"]
 
+[dependencies]
+voice-input-runtime = { path = "../voice-input-runtime" }
+voice-input-linux = { path = "../voice-input-linux" }
+voice-input-macos = { path = "../voice-input-macos" }
+voice-input-windows = { path = "../voice-input-windows" }

@@ -17,20 +17,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+from model_catalog import model_spec, normalize_choice
 
-DEFAULT_BACKEND = "funasr"
-DEFAULT_MODEL_ID_BY_BACKEND = {
-    "funasr": "FunAudioLLM/Fun-ASR-Nano-2512",
-    "qwen": "Qwen/Qwen3-ASR-1.7B",
-}
-DEFAULT_MODEL_URL_BY_BACKEND = {
-    "funasr": "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512",
-    "qwen": "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR",
-}
-DEFAULT_LOCAL_DIR_BY_BACKEND = {
-    "funasr": Path("./models/FunAudioLLM/Fun-ASR-Nano-2512"),
-    "qwen": Path("./models/Qwen/Qwen3-ASR-1.7B"),
-}
+DEFAULT_MODEL = "funasr"
 DEFAULT_REVISION_BY_BACKEND = {
     "funasr": "master",
     "qwen": None,
@@ -55,12 +44,10 @@ ENV_LOCAL_DIR = os.environ.get("VOICEINPUT_ASR_MODEL_DIR", "").strip()
 def normalize_backend_name(value: str | None) -> str | None:
     if not value:
         return None
-    normalized = value.strip().lower()
-    if normalized in {"funasr", "fun"}:
-        return "funasr"
-    if normalized in {"qwen", "qwen3", "qwen-asr"}:
-        return "qwen"
-    return None
+    try:
+        return model_spec(value)["backend"]
+    except KeyError:
+        return None
 
 
 def infer_backend_from_env() -> str:
@@ -75,7 +62,7 @@ def infer_backend_from_env() -> str:
     if backend:
         return backend
 
-    return DEFAULT_BACKEND
+    return model_spec(DEFAULT_MODEL)["backend"]
 
 
 def has_required_model_files(local_dir: Path, backend: str) -> bool:
@@ -164,13 +151,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="部署本地 ASR 模型")
     parser.add_argument(
         "--backend",
-        choices=sorted(DEFAULT_MODEL_ID_BY_BACKEND.keys()),
+        choices=["funasr", "qwen"],
         default=None,
         help="选择 ASR 模型后端",
     )
     parser.add_argument(
         "--model",
-        choices=sorted(DEFAULT_MODEL_ID_BY_BACKEND.keys()),
+        choices=["funasr", "qwen", "qwen-0.6b"],
         default=None,
         help="选择 ASR 模型（backend 的别名）",
     )
@@ -239,10 +226,10 @@ def default_revision_for_backend(backend: str) -> str | None:
 def default_local_dir_for_model_id(model_id: str) -> Path:
     normalized = model_id.strip().lower()
     if "qwen/qwen3-asr-0.6b" in normalized:
-        return Path("./models/Qwen/Qwen3-ASR-0.6B")
+        return Path(model_spec("qwen-0.6b")["model_dir"])
     if "qwen/qwen3-asr" in normalized:
-        return Path("./models/Qwen/Qwen3-ASR-1.7B")
-    return DEFAULT_LOCAL_DIR_BY_BACKEND["funasr"]
+        return Path(model_spec("qwen")["model_dir"])
+    return Path(model_spec("funasr")["model_dir"])
 
 
 def main() -> int:
@@ -255,10 +242,20 @@ def main() -> int:
         return 2
 
     cli_backend = args.model or args.backend
+    selected_model = None
     if cli_backend:
-        backend = cli_backend
+        normalized = normalize_choice(cli_backend)
+        selected_model = model_spec(normalized)
+        backend = selected_model["backend"]
     else:
         backend = infer_backend_from_env()
+        if ENV_MODEL_NAME:
+            try:
+                selected_model = model_spec(ENV_MODEL_NAME)
+            except KeyError:
+                selected_model = model_spec(backend)
+        else:
+            selected_model = model_spec(backend)
 
     revision = args.revision or default_revision_for_backend(backend)
 
@@ -267,14 +264,14 @@ def main() -> int:
     elif cli_backend is None and ENV_MODEL_ID:
         model_id = ENV_MODEL_ID
     else:
-        model_id = DEFAULT_MODEL_ID_BY_BACKEND[backend]
+        model_id = selected_model["model_id"]
 
     if args.source_url:
         source_url = args.source_url
     elif cli_backend is None and ENV_SOURCE_URL:
         source_url = ENV_SOURCE_URL
     else:
-        source_url = DEFAULT_MODEL_URL_BY_BACKEND[backend]
+        source_url = selected_model["source_url"]
 
     if args.local_dir:
         local_dir = Path(args.local_dir)
@@ -285,7 +282,7 @@ def main() -> int:
     elif ENV_MODEL_ID:
         local_dir = default_local_dir_for_model_id(ENV_MODEL_ID)
     else:
-        local_dir = Path(DEFAULT_LOCAL_DIR_BY_BACKEND[backend])
+        local_dir = Path(selected_model["model_dir"])
 
     has_nvidia = detect_nvidia_gpu()
     has_mps = detect_mps()

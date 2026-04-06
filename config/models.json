@@ -1,0 +1,37 @@
+{
+  "aliases": {
+    "fun": "funasr",
+    "funasr": "funasr",
+    "qwen": "qwen",
+    "qwen3": "qwen",
+    "qwen-asr": "qwen",
+    "qwen-0.6b": "qwen-0.6b",
+    "qwen0.6b": "qwen-0.6b",
+    "qwen06": "qwen-0.6b",
+    "qwen3-0.6b": "qwen-0.6b",
+    "qwen3-asr-0.6b": "qwen-0.6b"
+  },
+  "models": {
+    "funasr": {
+      "backend": "funasr",
+      "model_id": "FunAudioLLM/Fun-ASR-Nano-2512",
+      "source_url": "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512",
+      "model_dir": "./models/FunAudioLLM/Fun-ASR-Nano-2512",
+      "remote_code": "./models/FunAudioLLM/Fun-ASR-Nano-2512/model.py"
+    },
+    "qwen": {
+      "backend": "qwen",
+      "model_id": "Qwen/Qwen3-ASR-1.7B",
+      "source_url": "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR",
+      "model_dir": "./models/Qwen/Qwen3-ASR-1.7B",
+      "remote_code": ""
+    },
+    "qwen-0.6b": {
+      "backend": "qwen",
+      "model_id": "Qwen/Qwen3-ASR-0.6B",
+      "source_url": "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR",
+      "model_dir": "./models/Qwen/Qwen3-ASR-0.6B",
+      "remote_code": ""
+    }
+  }
+}

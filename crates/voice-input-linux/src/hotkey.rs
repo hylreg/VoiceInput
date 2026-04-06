@@ -1,10 +1,19 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
-use std::thread;
+#[cfg(target_os = "linux")]
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
+
+#[cfg(target_os = "linux")]
+use std::sync::atomic::Ordering;
+#[cfg(target_os = "linux")]
+use std::sync::mpsc;
+#[cfg(target_os = "linux")]
+use std::thread;
+#[cfg(target_os = "linux")]
 use std::time::Instant;
 
 use voice_input_core::{Result, VoiceInputError};
+use voice_input_runtime::LiveJobState;
 
 #[cfg(target_os = "linux")]
 use device_query::{DeviceQuery, DeviceState, Keycode};
@@ -212,7 +221,7 @@ pub struct LinuxHotkeyWatcher;
 impl LinuxHotkeyWatcher {
     pub fn spawn(
         _spec: LinuxHotkeySpec,
-        _active: Arc<AtomicBool>,
+        _active: Arc<LiveJobState>,
         _recorder: crate::recorder::LinuxMicAudioRecorder,
     ) -> Result<Self> {
         Err(VoiceInputError::Hotkey(
@@ -246,7 +255,7 @@ pub struct LinuxHotkeyWatcher {
 impl LinuxHotkeyWatcher {
     pub fn spawn(
         spec: LinuxHotkeySpec,
-        active: Arc<AtomicBool>,
+        active: Arc<LiveJobState>,
         recorder: crate::recorder::LinuxMicAudioRecorder,
         double_ctrl_window: Duration,
     ) -> Result<Self> {
@@ -277,7 +286,7 @@ impl LinuxHotkeyWatcher {
 
                         if triggered {
                             if !recently_triggered {
-                                if active.load(Ordering::SeqCst) {
+                                if active.is_active() {
                                     eprintln!("检测到双击 Ctrl 停止热键，正在结束录音...");
                                     recorder.stop();
                                 } else {
@@ -308,7 +317,7 @@ impl LinuxHotkeyWatcher {
                             continue;
                         }
 
-                        if active.load(Ordering::SeqCst) {
+                        if active.is_active() {
                             eprintln!("检测到停止热键，正在结束录音...");
                             recorder.stop();
                         } else {

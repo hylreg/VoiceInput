@@ -1,6 +1,5 @@
 #[cfg(target_os = "windows")]
 mod windows_runtime {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -17,8 +16,12 @@ mod windows_runtime {
     use crate::bridge::{ClipboardWindowsImeBridge, WindowsImeBridge};
     use crate::host::{WindowsHostConfig, WindowsInputMethodHost};
     use crate::recorder::WindowsMicAudioRecorder;
-    use voice_input_asr::{FunAsrConfig, LocalFunAsrTranscriber, PythonFunAsrRunner};
-    use voice_input_core::{AppConfig, AppController, MockHotkeyManager, Result, VoiceInputError};
+    use voice_input_asr::FunAsrConfig;
+    use voice_input_core::{AppConfig, Result, VoiceInputError};
+    use voice_input_runtime::{
+        preflight_python_asr, print_live_ready, run_python_live_job, spawn_logged_live_job,
+        LiveJobState,
+    };
 
     #[derive(Debug, Clone)]
     pub struct WindowsLiveAppConfig {
@@ -37,11 +40,6 @@ mod windows_runtime {
                 max_recording_duration: Duration::from_secs(12),
             }
         }
-    }
-
-    #[derive(Default)]
-    struct RuntimeState {
-        job_active: AtomicBool,
     }
 
     #[derive(Clone, Copy)]
@@ -115,10 +113,10 @@ mod windows_runtime {
     pub fn run_live_app(config: WindowsLiveAppConfig) -> Result<()> {
         let hotkey = HotkeySpec::parse(&config.app.activation_hotkey)?;
         let recorder = WindowsMicAudioRecorder::new(config.max_recording_duration);
-        let state = Arc::new(RuntimeState::default());
+        let state = Arc::new(LiveJobState::default());
 
         println!("正在预检 Windows ASR 环境...");
-        let _ = PythonFunAsrRunner::connect(config.asr.clone())?;
+        preflight_python_asr(&config.asr)?;
         println!("ASR 环境预检完成");
 
         let registration = unsafe {
@@ -136,10 +134,12 @@ mod windows_runtime {
             HotkeyRegistration { id: 1 }
         };
 
-        println!("VoiceInput Windows 常驻应用已启动");
-        println!("热键：{}", config.app.activation_hotkey);
-        println!("说明：按一次开始录音，再按一次停止并转写");
-        println!("提交方式：Windows Unicode 注入，失败时回退剪贴板粘贴");
+        print_live_ready(
+            "Windows",
+            &config.app.activation_hotkey,
+            "按一次开始录音，再按一次停止并转写",
+            ["提交方式：Windows Unicode 注入，失败时回退剪贴板粘贴"],
+        );
 
         let mut msg = MSG {
             hwnd: std::ptr::null_mut(),
@@ -162,18 +162,13 @@ mod windows_runtime {
             }
 
             if msg.message == WM_HOTKEY && msg.wParam == registration.id as usize {
-                if state.job_active.load(Ordering::SeqCst) {
+                if state.is_active() {
                     if recorder.is_recording() {
                         println!("收到停止热键");
                         recorder.stop();
                     }
-                } else if state
-                    .job_active
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-                {
+                } else if spawn_recording_job(config.clone(), recorder.clone(), &state)? {
                     println!("收到启动热键");
-                    spawn_recording_job(config.clone(), recorder.clone(), Arc::clone(&state));
                 }
             }
 
@@ -190,38 +185,21 @@ mod windows_runtime {
     fn spawn_recording_job(
         config: WindowsLiveAppConfig,
         recorder: WindowsMicAudioRecorder,
-        state: Arc<RuntimeState>,
-    ) {
-        std::thread::Builder::new()
-            .name("voiceinput-windows-recording".to_string())
-            .spawn(move || {
+        state: &Arc<LiveJobState>,
+    ) -> Result<bool> {
+        spawn_logged_live_job(
+            "voiceinput-windows-recording",
+            state,
+            "识别结果：",
+            "Windows 常驻输入失败：",
+            move || {
                 let bridge: Box<dyn WindowsImeBridge> = Box::new(ClipboardWindowsImeBridge);
                 let host = WindowsInputMethodHost::new_with_bridge(config.host, bridge);
-                let asr_runner = match PythonFunAsrRunner::connect(config.asr.clone()) {
-                    Ok(runner) => runner,
-                    Err(err) => {
-                        eprintln!("Windows 常驻输入失败：预加载 ASR 模型失败：{err}");
-                        state.job_active.store(false, Ordering::SeqCst);
-                        return;
-                    }
-                };
-                let transcriber = LocalFunAsrTranscriber::new(config.asr, Box::new(asr_runner));
-                let controller = AppController::new(
-                    config.app,
-                    Box::new(MockHotkeyManager),
-                    Box::new(recorder),
-                    Box::new(transcriber),
-                    Box::new(host),
-                );
-
                 println!("正在录音...");
-                match controller.process_once() {
-                    Ok(text) => println!("识别结果：{text}"),
-                    Err(err) => eprintln!("Windows 常驻输入失败：{err}"),
-                }
-                state.job_active.store(false, Ordering::SeqCst);
-            })
-            .expect("spawn windows recording worker");
+                run_python_live_job(config.app, config.asr, Box::new(recorder), Box::new(host))
+            },
+        )
+        .map_err(|err| VoiceInputError::Hotkey(format!("启动 Windows 录音线程失败：{err}")))
     }
 }
 

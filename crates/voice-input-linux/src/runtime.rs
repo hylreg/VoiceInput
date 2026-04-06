@@ -2,6 +2,7 @@
 
 #[cfg(target_os = "linux")]
 mod linux_runtime {
+    use std::cell::RefCell;
     use std::env;
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,12 +14,16 @@ mod linux_runtime {
     use crate::hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
     use crate::ibus::backspace_in_active_window;
     use crate::recorder::LinuxMicAudioRecorder;
-    use crate::tray::{spawn_linux_tray, LinuxTrayConfig};
+    use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
     use voice_input_asr::{
-        FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber, PythonFunAsrRunner,
-        SocketFunAsrStreamingRunner,
+        FunAsrConfig, FunAsrRunner, FunAsrStreamingRunner, LocalFunAsrTranscriber,
+        PythonFunAsrRunner, PythonFunAsrStreamingRunner, SocketFunAsrStreamingRunner,
     };
     use voice_input_core::{AppConfig, InputMethodHost, Result};
+    use voice_input_runtime::{
+        print_live_ready, run_streaming_live_cycle, stream_preview_chunk, LiveJobHandle,
+        LiveJobState, LivePreviewSession,
+    };
 
     #[derive(Debug, Clone)]
     pub struct LinuxLiveAppConfig {
@@ -91,10 +96,132 @@ mod linux_runtime {
         Ok(())
     }
 
+    fn build_linux_asr(
+        config: &FunAsrConfig,
+    ) -> Result<(
+        Box<dyn FunAsrRunner>,
+        Option<Box<dyn FunAsrStreamingRunner>>,
+    )> {
+        if let Ok(socket_path) = env::var("VOICEINPUT_FUNASR_SOCKET") {
+            println!("检测到外部 ASR 调试服务：{socket_path}");
+            let runner = SocketFunAsrStreamingRunner::connect(socket_path, config.clone())?;
+            return Ok((Box::new(runner.clone()), Some(Box::new(runner))));
+        }
+
+        if config.is_qwen() {
+            return Ok((Box::new(PythonFunAsrRunner::connect(config.clone())?), None));
+        }
+
+        let runner = PythonFunAsrStreamingRunner::connect(config.clone())?;
+        Ok((Box::new(runner.clone()), Some(Box::new(runner))))
+    }
+
+    fn run_recording_cycle(
+        recorder: &LinuxMicAudioRecorder,
+        host: &LinuxInputMethodHost,
+        transcriber: &LocalFunAsrTranscriber,
+        preview_runner: Option<&dyn FunAsrStreamingRunner>,
+        silence_stop_timeout: Duration,
+        tray: Option<&LinuxTrayHandle>,
+        watcher: &LinuxHotkeyWatcher,
+        _job: LiveJobHandle,
+    ) -> Result<bool> {
+        if let Some(tray) = tray {
+            tray.set_recording(true);
+        }
+
+        println!("正在录音...");
+        let silence_stop_enabled = Arc::new(AtomicBool::new(true));
+        let mut recording_indicator_inserted = false;
+        let session = match LivePreviewSession::begin(host, recording_indicator_text) {
+            Ok(session) => session,
+            Err(err) => {
+                eprintln!("Linux 常驻输入失败：{err}");
+                if let Some(tray) = tray {
+                    tray.set_recording(false);
+                }
+                return Ok(false);
+            }
+        };
+        let preview_error = RefCell::new(None::<String>);
+        let result = run_streaming_live_cycle(
+            host,
+            transcriber,
+            preview_runner,
+            recording_indicator_text,
+            |session, preview_runner| {
+                if let Err(err) = type_recording_marker() {
+                    eprintln!("Linux 常驻输入失败：录音状态图标插入失败：{err}");
+                } else {
+                    recording_indicator_inserted = true;
+                }
+
+                let audio = recorder.record_once_with_chunks(
+                    Duration::from_millis(100),
+                    silence_stop_timeout,
+                    Arc::clone(&silence_stop_enabled),
+                    |sample_rate, samples, is_final| {
+                        let Some(preview_runner) = preview_runner else {
+                            return;
+                        };
+                        if let Err(err) = stream_preview_chunk(
+                            preview_runner,
+                            session,
+                            sample_rate,
+                            &samples,
+                            is_final,
+                        ) {
+                            *preview_error.borrow_mut() = Some(format!("流式预览失败：{err}"));
+                        }
+                    },
+                );
+                audio
+            },
+            || {
+                if let Some(err) = preview_error.borrow_mut().take() {
+                    return Err(voice_input_core::VoiceInputError::Transcription(err));
+                }
+
+                if let Some(tray) = tray {
+                    tray.set_recording(false);
+                    if tray.is_quit_requested() {
+                        watcher.stop();
+                    }
+                }
+
+                if recording_indicator_inserted {
+                    backspace_in_active_window(RECORDING_MARKER.chars().count())?;
+                }
+                Ok(())
+            },
+        );
+
+        match result {
+            Ok(transcript) => {
+                if let Some(tray) = tray {
+                    tray.set_recording(false);
+                    if tray.is_quit_requested() {
+                        watcher.stop();
+                        return Ok(true);
+                    }
+                }
+                println!("识别结果：{transcript}");
+            }
+            Err(err) => {
+                if let Some(tray) = tray {
+                    tray.set_recording(false);
+                }
+                eprintln!("Linux 常驻输入失败：{err}");
+            }
+        }
+
+        Ok(false)
+    }
+
     pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
         let recorder = LinuxMicAudioRecorder::new(config.max_recording_duration);
         let recorder_for_watcher = recorder.clone();
-        let active = Arc::new(AtomicBool::new(false));
+        let active = Arc::new(LiveJobState::default());
         let active_for_watcher = Arc::clone(&active);
         let quit_requested = Arc::new(AtomicBool::new(false));
         let activation_hotkey = config.app.activation_hotkey.clone();
@@ -107,16 +234,7 @@ mod linux_runtime {
         )?;
         let host = LinuxInputMethodHost::new(config.host.clone());
         println!("正在预加载 ASR 模型...");
-        let asr_runner: Box<dyn FunAsrRunner> =
-            if let Ok(socket_path) = env::var("VOICEINPUT_FUNASR_SOCKET") {
-                println!("检测到外部 ASR 调试服务：{socket_path}");
-                Box::new(SocketFunAsrStreamingRunner::connect(
-                    socket_path,
-                    config.asr.clone(),
-                )?)
-            } else {
-                Box::new(PythonFunAsrRunner::connect(config.asr.clone())?)
-            };
+        let (asr_runner, preview_runner) = build_linux_asr(&config.asr)?;
         let transcriber = LocalFunAsrTranscriber::new(config.asr.clone(), asr_runner);
         println!("ASR 模型预加载完成");
         let tray = if config.show_status_item {
@@ -132,20 +250,28 @@ mod linux_runtime {
             None
         };
 
-        println!("VoiceInput Linux 常驻应用已启动");
-        println!(
-            "热键：{}",
-            describe_activation_hotkey(&activation_hotkey, config.double_ctrl_window)
-        );
-        println!("双击间隔：{}ms", config.double_ctrl_window.as_millis());
-        println!(
+        let hotkey_label =
+            describe_activation_hotkey(&activation_hotkey, config.double_ctrl_window);
+        let silence_label = format!(
             "静音自动停录：{}ms",
             config.silence_stop_timeout.as_millis()
         );
-        println!("说明：双击一次开始录音，再双击一次停止并转写");
-        if config.show_status_item {
-            println!("状态提示：已启用");
-        }
+        let status_label = if config.show_status_item {
+            Some("状态提示：已启用".to_string())
+        } else {
+            None
+        };
+        print_live_ready(
+            "Linux",
+            &hotkey_label,
+            "双击一次开始录音，再双击一次停止并转写",
+            [
+                format!("双击间隔：{}ms", config.double_ctrl_window.as_millis()),
+                silence_label,
+            ]
+            .into_iter()
+            .chain(status_label.into_iter()),
+        );
 
         loop {
             if quit_requested.load(Ordering::SeqCst) {
@@ -158,123 +284,21 @@ mod linux_runtime {
                 continue;
             }
 
-            if active
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-            {
+            let Some(job) = LiveJobState::try_acquire(&active) else {
                 continue;
-            }
+            };
 
-            if let Some(tray) = tray.as_ref() {
-                tray.set_recording(true);
-            }
-
-            println!("正在录音...");
-            let silence_stop_enabled = Arc::new(AtomicBool::new(false));
-            let mut recording_indicator_inserted = false;
-            if let Err(err) = host.start_composition() {
-                eprintln!("Linux 常驻输入失败：{err}");
-                active.store(false, Ordering::SeqCst);
-                if let Some(tray) = tray.as_ref() {
-                    tray.set_recording(false);
-                }
-                continue;
-            }
-
-            if let Err(err) = type_recording_marker() {
-                eprintln!("Linux 常驻输入失败：录音状态图标插入失败：{err}");
-            } else {
-                recording_indicator_inserted = true;
-            }
-
-            if let Err(err) = host.update_preedit(&recording_indicator_text(None)) {
-                eprintln!("Linux 常驻输入失败：录音状态图标更新失败：{err}");
-            }
-
-            let audio = match recorder.record_once_with_chunks(
-                Duration::from_millis(100),
+            if run_recording_cycle(
+                &recorder,
+                &host,
+                &transcriber,
+                preview_runner.as_deref(),
                 config.silence_stop_timeout,
-                Arc::clone(&silence_stop_enabled),
-                |_, _, _| {},
-            ) {
-                Ok(audio) => audio,
-                Err(err) => {
-                    if recording_indicator_inserted {
-                        let _ = backspace_in_active_window(RECORDING_MARKER.chars().count());
-                    }
-                    active.store(false, Ordering::SeqCst);
-                    if let Some(tray) = tray.as_ref() {
-                        tray.set_recording(false);
-                    }
-                    let _ = host.cancel_composition();
-                    let _ = host.end_composition();
-                    eprintln!("Linux 常驻输入失败：{err}");
-                    continue;
-                }
-            };
-            active.store(false, Ordering::SeqCst);
-
-            if let Some(tray) = tray.as_ref() {
-                tray.set_recording(false);
-                if tray.is_quit_requested() {
-                    watcher.stop();
-                    break;
-                }
-            }
-
-            let transcript = match transcriber.transcribe_allow_empty(&audio) {
-                Ok(text) => text.trim().to_string(),
-                Err(err) => {
-                    if recording_indicator_inserted {
-                        let _ = backspace_in_active_window(RECORDING_MARKER.chars().count());
-                    }
-                    let _ = host.cancel_composition();
-                    let _ = host.end_composition();
-                    eprintln!("Linux 常驻输入失败：转写错误：{err}");
-                    continue;
-                }
-            };
-
-            if transcript.trim().is_empty() {
-                if recording_indicator_inserted {
-                    let _ = backspace_in_active_window(RECORDING_MARKER.chars().count());
-                }
-                let _ = host.cancel_composition();
-                let _ = host.end_composition();
-                eprintln!("Linux 常驻输入失败：转写结果为空");
-                continue;
-            }
-
-            println!("识别结果：{transcript}");
-
-            if let Err(err) = host.update_preedit(&recording_indicator_text(Some(&transcript))) {
-                if recording_indicator_inserted {
-                    let _ = backspace_in_active_window(RECORDING_MARKER.chars().count());
-                }
-                let _ = host.cancel_composition();
-                let _ = host.end_composition();
-                eprintln!("Linux 常驻输入失败：预编辑更新失败：{err}");
-                continue;
-            }
-
-            if recording_indicator_inserted {
-                if let Err(err) = backspace_in_active_window(RECORDING_MARKER.chars().count()) {
-                    let _ = host.cancel_composition();
-                    let _ = host.end_composition();
-                    eprintln!("Linux 常驻输入失败：清理录音图标失败：{err}");
-                    continue;
-                }
-            }
-
-            if let Err(err) = host.commit_text(&transcript) {
-                let _ = host.cancel_composition();
-                let _ = host.end_composition();
-                eprintln!("Linux 常驻输入失败：提交失败：{err}");
-                continue;
-            }
-
-            if let Err(err) = host.end_composition() {
-                eprintln!("Linux 常驻输入失败：结束输入失败：{err}");
+                tray.as_ref(),
+                &watcher,
+                job,
+            )? {
+                break;
             }
         }
 

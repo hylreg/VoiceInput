@@ -23,10 +23,11 @@ from pathlib import Path
 import numpy as np
 import torch
 from funasr import AutoModel
+from model_catalog import model_spec
 
 
-DEFAULT_MODEL_DIR = Path("./models/FunAudioLLM/Fun-ASR-Nano-2512")
-DEFAULT_REMOTE_CODE = "./model.py"
+DEFAULT_MODEL_DIR = Path(model_spec("funasr")["model_dir"])
+DEFAULT_REMOTE_CODE = model_spec("funasr")["remote_code"] or "./model.py"
 DEFAULT_SOCKET_PATH = Path("/tmp/voiceinput-funasr.sock")
 
 

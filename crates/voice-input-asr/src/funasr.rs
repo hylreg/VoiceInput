@@ -482,6 +482,37 @@ fn python_command(python_bin: &str, script: &str) -> Command {
     }
 }
 
+fn read_ready_json<R: BufRead>(
+    reader: &mut R,
+    empty_message: &str,
+    wait_error_message: &str,
+) -> Result<serde_json::Value> {
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|e| VoiceInputError::Transcription(format!("{wait_error_message}：{e}")))?;
+        if read == 0 {
+            return Err(VoiceInputError::Transcription(empty_message.to_string()));
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+
+        if json.get("ready").and_then(|value| value.as_bool()) == Some(true) {
+            return Ok(json);
+        }
+    }
+}
+
 pub struct PythonFunAsrRunner {
     python_bin: String,
     worker: Option<Arc<Mutex<PythonFunAsrWorker>>>,
@@ -587,25 +618,11 @@ impl PythonFunAsrWorker {
         })?;
         let mut stdout = BufReader::new(stdout);
 
-        let mut ready_line = String::new();
-        let read = stdout.read_line(&mut ready_line).map_err(|e| {
-            VoiceInputError::Transcription(format!("等待 ASR worker 就绪失败：{e}"))
-        })?;
-        if read == 0 {
-            return Err(VoiceInputError::Transcription(
-                "ASR worker 启动后没有返回就绪信号".to_string(),
-            ));
-        }
-
-        let ready = serde_json::from_str::<serde_json::Value>(ready_line.trim()).map_err(|e| {
-            VoiceInputError::Transcription(format!("解析 ASR worker 就绪信号失败：{e}"))
-        })?;
-        if ready.get("ready").and_then(|value| value.as_bool()) != Some(true) {
-            return Err(VoiceInputError::Transcription(format!(
-                "ASR worker 就绪信号异常：{}",
-                ready
-            )));
-        }
+        let _ready = read_ready_json(
+            &mut stdout,
+            "ASR worker 启动后没有返回就绪信号",
+            "等待 ASR worker 就绪失败",
+        )?;
 
         Ok(Self {
             child,
@@ -802,6 +819,7 @@ impl Drop for PythonFunAsrRunner {
     }
 }
 
+#[derive(Clone)]
 pub struct PythonFunAsrStreamingRunner {
     worker: Arc<Mutex<PythonFunAsrStreamingWorker>>,
     config: FunAsrConfig,
@@ -879,25 +897,11 @@ impl PythonFunAsrStreamingWorker {
         })?;
         let mut stdout = BufReader::new(stdout);
 
-        let mut ready_line = String::new();
-        let read = stdout.read_line(&mut ready_line).map_err(|e| {
-            VoiceInputError::Transcription(format!("等待 FunASR 流式 worker 就绪失败：{e}"))
-        })?;
-        if read == 0 {
-            return Err(VoiceInputError::Transcription(
-                "FunASR 流式 worker 启动后没有返回就绪信号".to_string(),
-            ));
-        }
-
-        let ready = serde_json::from_str::<serde_json::Value>(ready_line.trim()).map_err(|e| {
-            VoiceInputError::Transcription(format!("解析 FunASR 流式 worker 就绪信号失败：{e}"))
-        })?;
-        if ready.get("ready").and_then(|value| value.as_bool()) != Some(true) {
-            return Err(VoiceInputError::Transcription(format!(
-                "FunASR 流式 worker 就绪信号异常：{}",
-                ready
-            )));
-        }
+        let _ready = read_ready_json(
+            &mut stdout,
+            "FunASR 流式 worker 启动后没有返回就绪信号",
+            "等待 FunASR 流式 worker 就绪失败",
+        )?;
 
         Ok(Self {
             child,
@@ -985,6 +989,7 @@ impl FunAsrStreamingRunner for PythonFunAsrStreamingRunner {
 }
 
 #[cfg(unix)]
+#[derive(Clone)]
 pub struct SocketFunAsrStreamingRunner {
     stream: Arc<Mutex<SocketFunAsrStreamingConnection>>,
     config: FunAsrConfig,
@@ -1058,25 +1063,11 @@ impl FunAsrRunner for SocketFunAsrStreamingRunner {
 #[cfg(unix)]
 impl SocketFunAsrStreamingConnection {
     fn wait_ready(&mut self) -> Result<()> {
-        let mut ready_line = String::new();
-        let read = self.reader.read_line(&mut ready_line).map_err(|e| {
-            VoiceInputError::Transcription(format!("等待 FunASR 开发调试服务就绪失败：{e}"))
-        })?;
-        if read == 0 {
-            return Err(VoiceInputError::Transcription(
-                "FunASR 开发调试服务启动后没有返回就绪信号".to_string(),
-            ));
-        }
-
-        let ready = serde_json::from_str::<serde_json::Value>(ready_line.trim()).map_err(|e| {
-            VoiceInputError::Transcription(format!("解析 FunASR 开发调试服务就绪信号失败：{e}"))
-        })?;
-        if ready.get("ready").and_then(|value| value.as_bool()) != Some(true) {
-            return Err(VoiceInputError::Transcription(format!(
-                "FunASR 开发调试服务就绪信号异常：{}",
-                ready
-            )));
-        }
+        let _ready = read_ready_json(
+            &mut self.reader,
+            "FunASR 开发调试服务启动后没有返回就绪信号",
+            "等待 FunASR 开发调试服务就绪失败",
+        )?;
 
         Ok(())
     }
@@ -1206,7 +1197,7 @@ fn wav_bytes_to_pcm16(audio_bytes: &[u8]) -> Result<(Vec<i16>, u32)> {
 #[cfg(test)]
 mod tests {
     use super::resample_pcm16;
-    use super::{FunAsrRequest, PythonFunAsrRunner, PythonFunAsrWorker};
+    use super::{read_ready_json, FunAsrRequest, PythonFunAsrRunner, PythonFunAsrWorker};
     use crate::runner::FunAsrRunner;
     use std::io::BufReader;
     use std::process::{Command, Stdio};
@@ -1250,6 +1241,7 @@ mod tests {
 import json
 import sys
 
+print("funasr version: test-noise", flush=True)
 print(json.dumps({"ready": True}), flush=True)
 
 for line in sys.stdin:
@@ -1275,13 +1267,12 @@ for line in sys.stdin:
         let stdout = child.stdout.take().expect("test worker stdout");
         let mut stdout = BufReader::new(stdout);
 
-        let mut ready_line = String::new();
-        let read = std::io::BufRead::read_line(&mut stdout, &mut ready_line)
-            .expect("read worker ready line");
-        assert!(read > 0, "test worker did not report ready");
-
-        let ready = serde_json::from_str::<serde_json::Value>(ready_line.trim())
-            .expect("parse worker ready line");
+        let ready = read_ready_json(
+            &mut stdout,
+            "test worker did not report ready",
+            "read worker ready line failed",
+        )
+        .expect("parse worker ready line");
         assert_eq!(
             ready.get("ready").and_then(|value| value.as_bool()),
             Some(true)

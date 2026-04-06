@@ -123,6 +123,109 @@ voiceinput_ensure_uv() {
   exit 1
 }
 
+voiceinput_find_cargo_bin() {
+  local cargo_bin
+  cargo_bin="$(command -v cargo || true)"
+  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
+    cargo_bin="${HOME}/.cargo/bin/cargo"
+  fi
+  printf '%s\n' "$cargo_bin"
+}
+
+voiceinput_run_cli() {
+  local cargo_bin
+  cargo_bin="$(voiceinput_find_cargo_bin)"
+  if [[ -z "$cargo_bin" ]]; then
+    echo "未找到 cargo，可先执行 scripts/voiceinput.sh bootstrap" >&2
+    exit 1
+  fi
+
+  uv run -- "$cargo_bin" run -p voice-input-cli -- "$@"
+}
+
+voiceinput_run_cli_release() {
+  local cargo_bin
+  cargo_bin="$(voiceinput_find_cargo_bin)"
+  if [[ -z "$cargo_bin" ]]; then
+    echo "未找到 cargo，可先执行 scripts/voiceinput.sh bootstrap" >&2
+    exit 1
+  fi
+
+  uv run -- "$cargo_bin" run -p voice-input-cli --release -- "$@"
+}
+
+voiceinput_run_cli_linux() {
+  local cargo_bin
+  cargo_bin="$(voiceinput_find_cargo_bin)"
+  if [[ -z "$cargo_bin" ]]; then
+    echo "未找到 cargo，可先执行 scripts/voiceinput.sh bootstrap" >&2
+    exit 1
+  fi
+
+  uv run -- "$cargo_bin" run -p voice-input-cli --features linux-ibus-smoke -- "$@"
+}
+
+voiceinput_run_bootstrap_args() {
+  if (($# > 0)); then
+    voiceinput_bootstrap_impl "$@"
+  else
+    voiceinput_bootstrap_impl
+  fi
+}
+
+voiceinput_run_platform_smoke() {
+  local platform="$1"
+  local audio_file="$2"
+  local backend="${3:-ibus}"
+
+  case "$platform" in
+    macos)
+      echo "正在运行 macOS smoke 验证"
+      voiceinput_macos_smoke_impl --audio-file "$audio_file"
+      ;;
+    linux)
+      echo "正在运行 Linux smoke"
+      voiceinput_linux_smoke_impl --audio-file "$audio_file" --backend "$backend"
+      ;;
+    windows)
+      echo "正在运行 Windows smoke 验证"
+      voiceinput_windows_smoke_impl --audio-file "$audio_file"
+      ;;
+    *)
+      echo "不支持的 smoke 平台：$platform" >&2
+      exit 2
+      ;;
+  esac
+}
+
+voiceinput_run_platform_live() {
+  local platform="$1"
+  local backend="${2:-ibus}"
+
+  voiceinput_ensure_cargo
+  voiceinput_ensure_uv
+
+  case "$platform" in
+    macos)
+      echo "正在启动 macOS 常驻应用"
+      voiceinput_run_cli_release live macos
+      ;;
+    linux)
+      echo "正在启动 Linux 常驻托盘版"
+      voiceinput_refresh_cargo_path
+      voiceinput_run_cli_linux live linux --backend "$backend"
+      ;;
+    windows)
+      echo "正在启动 Windows 常驻应用"
+      voiceinput_run_cli_release live windows
+      ;;
+    *)
+      echo "不支持的 live 平台：$platform" >&2
+      exit 2
+      ;;
+  esac
+}
+
 voiceinput_ensure_linux_dev_deps() {
   local required_packages=(
     pkg-config
@@ -167,97 +270,33 @@ voiceinput_ensure_linux_dev_deps() {
 }
 
 voiceinput_normalize_model_choice() {
-  local choice="${1:-}"
-  choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+  python3 "$SCRIPT_DIR/model_catalog.py" normalize "${1:-}"
+}
 
-  case "$choice" in
-    funasr|fun)
-      printf '%s\n' "funasr"
-      ;;
-    qwen|qwen3|qwen-asr)
-      printf '%s\n' "qwen"
-      ;;
-    qwen-0.6b|qwen0.6b|qwen06|qwen3-0.6b|qwen3-asr-0.6b)
-      printf '%s\n' "qwen-0.6b"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+voiceinput_model_field_for_choice() {
+  local choice="$1"
+  local field="$2"
+  python3 "$SCRIPT_DIR/model_catalog.py" get "$choice" "$field"
 }
 
 voiceinput_model_backend_for_choice() {
-  local choice
-  choice="$(voiceinput_normalize_model_choice "${1:-}")" || return 1
-
-  case "$choice" in
-    funasr)
-      printf '%s\n' "funasr"
-      ;;
-    qwen|qwen-0.6b)
-      printf '%s\n' "qwen"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  voiceinput_model_field_for_choice "${1:-}" "backend"
 }
 
 voiceinput_model_id_for_choice() {
-  local choice
-  choice="$(voiceinput_normalize_model_choice "${1:-}")" || return 1
-
-  case "$choice" in
-    funasr)
-      printf '%s\n' "FunAudioLLM/Fun-ASR-Nano-2512"
-      ;;
-    qwen)
-      printf '%s\n' "Qwen/Qwen3-ASR-1.7B"
-      ;;
-    qwen-0.6b)
-      printf '%s\n' "Qwen/Qwen3-ASR-0.6B"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  voiceinput_model_field_for_choice "${1:-}" "model_id"
 }
 
 voiceinput_model_source_url_for_choice() {
-  local choice
-  choice="$(voiceinput_normalize_model_choice "${1:-}")" || return 1
-
-  case "$choice" in
-    funasr)
-      printf '%s\n' "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
-      ;;
-    qwen|qwen-0.6b)
-      printf '%s\n' "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  voiceinput_model_field_for_choice "${1:-}" "source_url"
 }
 
 voiceinput_model_local_dir_for_choice() {
-  local choice
-  choice="$(voiceinput_normalize_model_choice "${1:-}")" || return 1
+  voiceinput_model_field_for_choice "${1:-}" "model_dir"
+}
 
-  case "$choice" in
-    funasr)
-      printf '%s\n' "./models/FunAudioLLM/Fun-ASR-Nano-2512"
-      ;;
-    qwen)
-      printf '%s\n' "./models/Qwen/Qwen3-ASR-1.7B"
-      ;;
-    qwen-0.6b)
-      printf '%s\n' "./models/Qwen/Qwen3-ASR-0.6B"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+voiceinput_model_remote_code_for_choice() {
+  voiceinput_model_field_for_choice "${1:-}" "remote_code"
 }
 
 voiceinput_apply_model_choice_env() {
@@ -269,6 +308,13 @@ voiceinput_apply_model_choice_env() {
   export VOICEINPUT_ASR_MODEL_ID="$(voiceinput_model_id_for_choice "$choice")"
   export VOICEINPUT_ASR_SOURCE_URL="$(voiceinput_model_source_url_for_choice "$choice")"
   export VOICEINPUT_ASR_MODEL_DIR="$(voiceinput_model_local_dir_for_choice "$choice")"
+  local remote_code
+  remote_code="$(voiceinput_model_remote_code_for_choice "$choice")"
+  if [[ -n "$remote_code" ]]; then
+    export VOICEINPUT_ASR_REMOTE_CODE="$remote_code"
+  else
+    unset VOICEINPUT_ASR_REMOTE_CODE
+  fi
 }
 
 voiceinput_config_file_path() {
@@ -284,166 +330,46 @@ voiceinput_write_model_config() {
   local tmp_file
   tmp_file="$(mktemp "${config_file}.XXXXXX")"
 
-  case "$normalized_model" in
-    funasr)
-      cat >"$tmp_file" <<'EOF'
-# VoiceInput shared configuration template.
-# Shell scripts source this file before deploying models or launching runtime.
-# Use `scripts/voiceinput.sh model qwen`, `scripts/voiceinput.sh model qwen-0.6b`
-# or `scripts/voiceinput.sh model funasr` to rewrite this file with a selected
-# default model.
-# Command-line arguments and explicit environment variables still override it.
-#
-# Keep one preset block uncommented below if you want a local default.
-
-## -------------------------------------------------------------------
-## FunASR preset
-## -------------------------------------------------------------------
-export VOICEINPUT_ASR_MODEL="funasr"
-export VOICEINPUT_ASR_BACKEND="funasr"
-export VOICEINPUT_ASR_MODEL_ID="FunAudioLLM/Fun-ASR-Nano-2512"
-export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
-export VOICEINPUT_ASR_MODEL_DIR="./models/FunAudioLLM/Fun-ASR-Nano-2512"
-export VOICEINPUT_ASR_REMOTE_CODE="./models/FunAudioLLM/Fun-ASR-Nano-2512/model.py"
-export VOICEINPUT_ASR_DEVICE="auto"
-export VOICEINPUT_ASR_LANGUAGE="中文"
-export VOICEINPUT_ASR_ITN="true"
-export VOICEINPUT_ASR_HOTWORDS=""
-
-## -------------------------------------------------------------------
-## Qwen preset
-## -------------------------------------------------------------------
-# export VOICEINPUT_ASR_MODEL="qwen"
-# export VOICEINPUT_ASR_BACKEND="qwen"
-# export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-1.7B"
-# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
-# export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-1.7B"
-# export VOICEINPUT_ASR_DEVICE="auto"
-# export VOICEINPUT_ASR_LANGUAGE="中文"
-# export VOICEINPUT_ASR_ITN="true"
-# export VOICEINPUT_ASR_HOTWORDS=""
-
-## -------------------------------------------------------------------
-## Qwen 0.6B preset
-## -------------------------------------------------------------------
-# export VOICEINPUT_ASR_MODEL="qwen-0.6b"
-# export VOICEINPUT_ASR_BACKEND="qwen"
-# export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-0.6B"
-# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
-# export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-0.6B"
-# export VOICEINPUT_ASR_DEVICE="auto"
-# export VOICEINPUT_ASR_LANGUAGE="中文"
-# export VOICEINPUT_ASR_ITN="true"
-# export VOICEINPUT_ASR_HOTWORDS=""
-EOF
-      ;;
-    qwen-0.6b)
-      cat >"$tmp_file" <<'EOF'
-# VoiceInput shared configuration template.
-# Shell scripts source this file before deploying models or launching runtime.
-# Use `scripts/voiceinput.sh model qwen`, `scripts/voiceinput.sh model qwen-0.6b`
-# or `scripts/voiceinput.sh model funasr` to rewrite this file with a selected
-# default model.
-# Command-line arguments and explicit environment variables still override it.
-#
-# Keep one preset block uncommented below if you want a local default.
-
-## -------------------------------------------------------------------
-## FunASR preset
-## -------------------------------------------------------------------
-# export VOICEINPUT_ASR_MODEL="funasr"
-# export VOICEINPUT_ASR_BACKEND="funasr"
-# export VOICEINPUT_ASR_MODEL_ID="FunAudioLLM/Fun-ASR-Nano-2512"
-# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
-# export VOICEINPUT_ASR_MODEL_DIR="./models/FunAudioLLM/Fun-ASR-Nano-2512"
-# export VOICEINPUT_ASR_REMOTE_CODE="./models/FunAudioLLM/Fun-ASR-Nano-2512/model.py"
-# export VOICEINPUT_ASR_DEVICE="auto"
-# export VOICEINPUT_ASR_LANGUAGE="中文"
-# export VOICEINPUT_ASR_ITN="true"
-# export VOICEINPUT_ASR_HOTWORDS=""
-
-## -------------------------------------------------------------------
-## Qwen preset
-## -------------------------------------------------------------------
-# export VOICEINPUT_ASR_MODEL="qwen"
-# export VOICEINPUT_ASR_BACKEND="qwen"
-# export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-1.7B"
-# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
-# export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-1.7B"
-# export VOICEINPUT_ASR_DEVICE="auto"
-# export VOICEINPUT_ASR_LANGUAGE="中文"
-# export VOICEINPUT_ASR_ITN="true"
-# export VOICEINPUT_ASR_HOTWORDS=""
-
-## -------------------------------------------------------------------
-## Qwen 0.6B preset
-## -------------------------------------------------------------------
-export VOICEINPUT_ASR_MODEL="qwen-0.6b"
-export VOICEINPUT_ASR_BACKEND="qwen"
-export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-0.6B"
-export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
-export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-0.6B"
-export VOICEINPUT_ASR_DEVICE="auto"
-export VOICEINPUT_ASR_LANGUAGE="中文"
-export VOICEINPUT_ASR_ITN="true"
-export VOICEINPUT_ASR_HOTWORDS=""
-EOF
-      ;;
-    qwen)
-      cat >"$tmp_file" <<'EOF'
-# VoiceInput shared configuration template.
-# Shell scripts source this file before deploying models or launching runtime.
-# Use `scripts/voiceinput.sh model qwen`, `scripts/voiceinput.sh model qwen-0.6b`
-# or `scripts/voiceinput.sh model funasr` to rewrite this file with a selected
-# default model.
-# Command-line arguments and explicit environment variables still override it.
-#
-# Keep one preset block uncommented below if you want a local default.
-
-## -------------------------------------------------------------------
-## FunASR preset
-## -------------------------------------------------------------------
-# export VOICEINPUT_ASR_MODEL="funasr"
-# export VOICEINPUT_ASR_BACKEND="funasr"
-# export VOICEINPUT_ASR_MODEL_ID="FunAudioLLM/Fun-ASR-Nano-2512"
-# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
-# export VOICEINPUT_ASR_MODEL_DIR="./models/FunAudioLLM/Fun-ASR-Nano-2512"
-# export VOICEINPUT_ASR_REMOTE_CODE="./models/FunAudioLLM/Fun-ASR-Nano-2512/model.py"
-# export VOICEINPUT_ASR_DEVICE="auto"
-# export VOICEINPUT_ASR_LANGUAGE="中文"
-# export VOICEINPUT_ASR_ITN="true"
-# export VOICEINPUT_ASR_HOTWORDS=""
-
-## -------------------------------------------------------------------
-## Qwen preset
-## -------------------------------------------------------------------
-export VOICEINPUT_ASR_MODEL="qwen"
-export VOICEINPUT_ASR_BACKEND="qwen"
-export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-1.7B"
-export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
-export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-1.7B"
-export VOICEINPUT_ASR_DEVICE="auto"
-export VOICEINPUT_ASR_LANGUAGE="中文"
-export VOICEINPUT_ASR_ITN="true"
-export VOICEINPUT_ASR_HOTWORDS=""
-
-## -------------------------------------------------------------------
-## Qwen 0.6B preset
-## -------------------------------------------------------------------
-# export VOICEINPUT_ASR_MODEL="qwen-0.6b"
-# export VOICEINPUT_ASR_BACKEND="qwen"
-# export VOICEINPUT_ASR_MODEL_ID="Qwen/Qwen3-ASR-0.6B"
-# export VOICEINPUT_ASR_SOURCE_URL="https://www.modelscope.cn/collections/Qwen/Qwen3-ASR"
-# export VOICEINPUT_ASR_MODEL_DIR="./models/Qwen/Qwen3-ASR-0.6B"
-# export VOICEINPUT_ASR_DEVICE="auto"
-# export VOICEINPUT_ASR_LANGUAGE="中文"
-# export VOICEINPUT_ASR_ITN="true"
-# export VOICEINPUT_ASR_HOTWORDS=""
-EOF
-      ;;
-  esac
+  python3 "$SCRIPT_DIR/model_catalog.py" render-config-file "$normalized_model" >"$tmp_file"
 
   mv "$tmp_file" "$config_file"
+}
+
+VOICEINPUT_EXPANDED_MODEL_ARGS=()
+
+voiceinput_expand_model_args() {
+  local mode="$1"
+  local model="$2"
+  local normalized_model
+  if ! normalized_model="$(voiceinput_normalize_model_choice "$model")"; then
+    return 1
+  fi
+
+  VOICEINPUT_EXPANDED_MODEL_ARGS=()
+  case "$normalized_model" in
+    qwen-0.6b)
+      VOICEINPUT_EXPANDED_MODEL_ARGS=(
+        "--backend" "$(voiceinput_model_backend_for_choice "$normalized_model")"
+        "--model-id" "$(voiceinput_model_id_for_choice "$normalized_model")"
+        "--source-url" "$(voiceinput_model_source_url_for_choice "$normalized_model")"
+        "--local-dir" "$(voiceinput_model_local_dir_for_choice "$normalized_model")"
+      )
+      ;;
+    *)
+      case "$mode" in
+        backend)
+          VOICEINPUT_EXPANDED_MODEL_ARGS=("--backend" "$normalized_model")
+          ;;
+        passthrough)
+          VOICEINPUT_EXPANDED_MODEL_ARGS=("--model" "$normalized_model")
+          ;;
+        *)
+          echo "不支持的模型展开模式：$mode" >&2
+          return 2
+          ;;
+      esac
+      ;;
+  esac
 }
 
 voiceinput_model_impl() {
@@ -512,24 +438,11 @@ voiceinput_bootstrap_impl() {
           exit 2
         fi
         if [[ "$1" == "--model" ]]; then
-          local normalized_model
-          if ! normalized_model="$(voiceinput_normalize_model_choice "$2")"; then
+          if ! voiceinput_expand_model_args backend "$2"; then
             echo "不支持的模型：$2" >&2
             exit 2
           fi
-          case "$normalized_model" in
-            qwen-0.6b)
-              deploy_args+=(
-                "--backend" "$(voiceinput_model_backend_for_choice "$normalized_model")"
-                "--model-id" "$(voiceinput_model_id_for_choice "$normalized_model")"
-                "--source-url" "$(voiceinput_model_source_url_for_choice "$normalized_model")"
-                "--local-dir" "$(voiceinput_model_local_dir_for_choice "$normalized_model")"
-              )
-              ;;
-            *)
-              deploy_args+=("--backend" "$2")
-              ;;
-          esac
+          deploy_args+=("${VOICEINPUT_EXPANDED_MODEL_ARGS[@]}")
         else
           deploy_args+=("$1" "$2")
         fi
@@ -656,19 +569,12 @@ EOF
   voiceinput_ensure_cargo
   voiceinput_ensure_uv
   cd "$REPO_ROOT"
-  local cargo_bin
-  cargo_bin="$(command -v cargo || true)"
-  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
-    cargo_bin="${HOME}/.cargo/bin/cargo"
-  fi
-  uv run -- "$cargo_bin" run -p voice-input-macos --bin voice-input-macos -- --audio-file "$audio_file"
+  voiceinput_run_cli smoke macos --audio-file "$audio_file"
 }
 
 voiceinput_linux_smoke_impl() {
   local audio_file=""
   local backend="ibus"
-  local smoke_args=()
-
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --audio-file)
@@ -677,7 +583,6 @@ voiceinput_linux_smoke_impl() {
           exit 2
         fi
         audio_file="$2"
-        smoke_args+=("$1" "$2")
         shift 2
         ;;
       --model)
@@ -697,7 +602,6 @@ voiceinput_linux_smoke_impl() {
           exit 2
         fi
         backend="$2"
-        smoke_args+=("$1" "$2")
         shift 2
         ;;
       --help|-h)
@@ -714,8 +618,8 @@ EOF
         exit 0
         ;;
       *)
-        smoke_args+=("$1")
-        shift
+        echo "不支持的参数：$1" >&2
+        exit 2
         ;;
     esac
   done
@@ -730,12 +634,7 @@ EOF
   voiceinput_ensure_linux_dev_deps
   voiceinput_refresh_cargo_path
   cd "$REPO_ROOT"
-  local cargo_bin
-  cargo_bin="$(command -v cargo || true)"
-  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
-    cargo_bin="${HOME}/.cargo/bin/cargo"
-  fi
-  uv run -- "$cargo_bin" run -p voice-input-linux --features ibus -- "${smoke_args[@]}"
+  voiceinput_run_cli_linux smoke linux --audio-file "$audio_file" --backend "$backend"
 }
 
 voiceinput_windows_smoke_impl() {
@@ -790,12 +689,7 @@ EOF
   voiceinput_ensure_cargo
   voiceinput_ensure_uv
   cd "$REPO_ROOT"
-  local cargo_bin
-  cargo_bin="$(command -v cargo || true)"
-  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
-    cargo_bin="${HOME}/.cargo/bin/cargo"
-  fi
-  uv run -- "$cargo_bin" run -p voice-input-windows -- --audio-file "$audio_file"
+  voiceinput_run_cli smoke windows --audio-file "$audio_file"
 }
 
 voiceinput_windows_install_impl() {
@@ -822,24 +716,11 @@ voiceinput_windows_install_impl() {
           exit 2
         fi
         if [[ "$1" == "--model" ]]; then
-          local normalized_model
-          if ! normalized_model="$(voiceinput_normalize_model_choice "$2")"; then
+          if ! voiceinput_expand_model_args passthrough "$2"; then
             echo "不支持的模型：$2" >&2
             exit 2
           fi
-          case "$normalized_model" in
-            qwen-0.6b)
-              bootstrap_args+=(
-                "--backend" "$(voiceinput_model_backend_for_choice "$normalized_model")"
-                "--model-id" "$(voiceinput_model_id_for_choice "$normalized_model")"
-                "--source-url" "$(voiceinput_model_source_url_for_choice "$normalized_model")"
-                "--local-dir" "$(voiceinput_model_local_dir_for_choice "$normalized_model")"
-              )
-              ;;
-            *)
-              bootstrap_args+=("$1" "$2")
-              ;;
-          esac
+          bootstrap_args+=("${VOICEINPUT_EXPANDED_MODEL_ARGS[@]}")
         else
           bootstrap_args+=("$1" "$2")
         fi
@@ -872,29 +753,20 @@ EOF
 
   cd "$REPO_ROOT"
   if ((${#bootstrap_args[@]} > 0)); then
-    voiceinput_bootstrap_impl "${bootstrap_args[@]}"
+    voiceinput_run_bootstrap_args "${bootstrap_args[@]}"
   else
-    voiceinput_bootstrap_impl
+    voiceinput_run_bootstrap_args
   fi
 
   if [[ "$run_smoke_after_bootstrap" == true ]]; then
-    echo "正在运行 Windows smoke 验证"
-    voiceinput_windows_smoke_impl --audio-file "$audio_file"
+    voiceinput_run_platform_smoke windows "$audio_file"
   fi
 
   if [[ "$run_live_app_after_bootstrap" != true ]]; then
     return 0
   fi
 
-  echo "正在启动 Windows 常驻应用"
-  voiceinput_ensure_cargo
-  voiceinput_ensure_uv
-  local cargo_bin
-  cargo_bin="$(command -v cargo || true)"
-  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
-    cargo_bin="${HOME}/.cargo/bin/cargo"
-  fi
-  uv run -- "$cargo_bin" run -p voice-input-windows --bin voice-input-windows-app --release
+  voiceinput_run_platform_live windows
 }
 
 voiceinput_macos_install_impl() {
@@ -910,24 +782,11 @@ voiceinput_macos_install_impl() {
             echo "缺少 $1 的值" >&2
             exit 2
           fi
-          local normalized_model
-          if ! normalized_model="$(voiceinput_normalize_model_choice "$2")"; then
+          if ! voiceinput_expand_model_args passthrough "$2"; then
             echo "不支持的模型：$2" >&2
             exit 2
           fi
-          case "$normalized_model" in
-            qwen-0.6b)
-              bootstrap_args+=(
-                "--backend" "$(voiceinput_model_backend_for_choice "$normalized_model")"
-                "--model-id" "$(voiceinput_model_id_for_choice "$normalized_model")"
-                "--source-url" "$(voiceinput_model_source_url_for_choice "$normalized_model")"
-                "--local-dir" "$(voiceinput_model_local_dir_for_choice "$normalized_model")"
-              )
-              ;;
-            *)
-              bootstrap_args+=("--backend" "$2")
-              ;;
-          esac
+          bootstrap_args+=("${VOICEINPUT_EXPANDED_MODEL_ARGS[@]}")
           shift 2
           continue
         fi
@@ -982,26 +841,16 @@ EOF
 
   cd "$REPO_ROOT"
   if ((${#bootstrap_args[@]} > 0)); then
-    voiceinput_bootstrap_impl "${bootstrap_args[@]}"
+    voiceinput_run_bootstrap_args "${bootstrap_args[@]}"
   else
-    voiceinput_bootstrap_impl
+    voiceinput_run_bootstrap_args
   fi
 
   if [[ "$run_smoke_before_launch" == true ]]; then
-    echo "正在运行 smoke 验证"
-    voiceinput_ensure_cargo
-    voiceinput_macos_smoke_impl --audio-file "$audio_file"
+    voiceinput_run_platform_smoke macos "$audio_file"
   fi
 
-  echo "正在启动 macOS 常驻应用"
-  voiceinput_ensure_cargo
-  voiceinput_ensure_uv
-  local cargo_bin
-  cargo_bin="$(command -v cargo || true)"
-  if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
-    cargo_bin="${HOME}/.cargo/bin/cargo"
-  fi
-  uv run -- "$cargo_bin" run -p voice-input-macos --bin voice-input-macos-app --release
+  voiceinput_run_platform_live macos
 }
 
 voiceinput_linux_install_impl() {
@@ -1036,24 +885,11 @@ voiceinput_linux_install_impl() {
           echo "缺少 --model 的值" >&2
           exit 2
         fi
-        local normalized_model
-        if ! normalized_model="$(voiceinput_normalize_model_choice "$2")"; then
+        if ! voiceinput_expand_model_args passthrough "$2"; then
           echo "不支持的模型：$2" >&2
           exit 2
         fi
-        case "$normalized_model" in
-          qwen-0.6b)
-            deploy_args+=(
-              "--backend" "$(voiceinput_model_backend_for_choice "$normalized_model")"
-              "--model-id" "$(voiceinput_model_id_for_choice "$normalized_model")"
-              "--source-url" "$(voiceinput_model_source_url_for_choice "$normalized_model")"
-              "--local-dir" "$(voiceinput_model_local_dir_for_choice "$normalized_model")"
-            )
-            ;;
-          *)
-            deploy_args+=("$1" "$2")
-            ;;
-        esac
+        deploy_args+=("${VOICEINPUT_EXPANDED_MODEL_ARGS[@]}")
         shift 2
         ;;
       --no-launch)
@@ -1098,26 +934,19 @@ EOF
 
   echo "正在准备本地依赖和模型"
   voiceinput_ensure_linux_dev_deps
-  voiceinput_bootstrap_impl "${deploy_args[@]}"
+  if ((${#deploy_args[@]} > 0)); then
+    voiceinput_run_bootstrap_args "${deploy_args[@]}"
+  else
+    voiceinput_run_bootstrap_args
+  fi
 
   if [[ "$run_smoke_after_bootstrap" == true ]]; then
-    echo "正在运行 Linux smoke"
-    voiceinput_ensure_cargo
-    voiceinput_linux_smoke_impl --audio-file "$audio_file" --backend "$backend"
+    voiceinput_run_platform_smoke linux "$audio_file" "$backend"
     exit 0
   fi
 
   if [[ "$run_live_app_after_bootstrap" == true ]]; then
-    echo "正在启动 Linux 常驻托盘版"
-    voiceinput_ensure_cargo
-    voiceinput_ensure_uv
-    voiceinput_refresh_cargo_path
-    local cargo_bin
-    cargo_bin="$(command -v cargo || true)"
-    if [[ -z "$cargo_bin" && -x "${HOME}/.cargo/bin/cargo" ]]; then
-      cargo_bin="${HOME}/.cargo/bin/cargo"
-    fi
-    uv run -- "$cargo_bin" run -p voice-input-linux --features ibus --bin voice-input-linux-app -- --backend "$backend"
+    voiceinput_run_platform_live linux "$backend"
   fi
 }
 
@@ -1485,7 +1314,7 @@ PY
 
   echo "FunASR 开发服务已就绪：$socket_path"
   VOICEINPUT_FUNASR_SOCKET="$socket_path" \
-    uv run -- cargo run -p voice-input-linux --features ibus --bin voice-input-linux-app -- "${app_args[@]}"
+    voiceinput_run_cli_linux live linux "${app_args[@]}"
 }
 
 usage() {
@@ -1512,7 +1341,8 @@ usage() {
 说明：
   - 所有子命令都会继续兼容现有脚本参数
   - 默认配置来自 config/voiceinput.env
-  - 推荐优先使用 `scripts/voiceinput.sh <command> ...`
+  - 脚本内部会统一转调到 `voice-input-cli`
+  - 也可以直接运行 `cargo run -p voice-input-cli -- <smoke|live> <macos|linux|windows> ...`
 EOF
 }
 

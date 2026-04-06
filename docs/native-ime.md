@@ -25,7 +25,7 @@
 macOS crate 还带了一个 smoke 路径：
 
 - 这个 smoke 路径建议使用 WAV/PCM 输入
-- 用 `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav` 触发
+- 用 `cargo run -p voice-input-cli -- smoke macos --audio-file testdata/smoke.wav` 触发
 - 实时运行时已经支持热键开始/停止录音，并在结束后提交文本
 
 - `voice-input-macos-app` 是常驻菜单栏入口
@@ -98,8 +98,10 @@ Python 环境：
 - ModelScope 模型页：`https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512`
 - 默认本地缓存目录：`./models/Qwen/Qwen3-ASR-0.6B`
 - 也兼容 `FunAudioLLM/Fun-ASR-Nano-2512` 和 `Qwen/Qwen3-ASR-1.7B`
-- 仓库级配置模板是 [`config/voiceinput.env`](../config/voiceinput.env)
+- 模型 catalog 单一来源是 [`config/models.json`](../config/models.json)
+- 仓库级默认配置是 [`config/voiceinput.env`](../config/voiceinput.env)
 - 统一入口是 [`scripts/voiceinput.sh`](../scripts/voiceinput.sh)
+- 脚本最终会转调到 `voice-input-cli`
 - `voice-input-asr` 里的 Python runner 会根据 `FunAsrConfig` 的 `backend` 选择 FunASR 或 Qwen 路径
 - 用 [`scripts/deploy_funasr_model.py`](../scripts/deploy_funasr_model.py) 下载模型
 - Python 依赖见 [`scripts/requirements-asr-base.txt`](../scripts/requirements-asr-base.txt) 和 [`scripts/requirements-asr-runtime.txt`](../scripts/requirements-asr-runtime.txt)
@@ -135,7 +137,9 @@ Python 环境：
 
 ### Smoke 路径
 
-- `scripts/voiceinput.sh macos smoke --audio-file testdata/smoke.wav`
+- `cargo run -p voice-input-cli -- smoke macos --audio-file testdata/smoke.wav`
+- `cargo run -p voice-input-cli --features linux-ibus-smoke -- smoke linux --audio-file testdata/smoke.wav --backend ibus`
+- `cargo run -p voice-input-cli -- smoke windows --audio-file testdata/smoke.wav`
 - `scripts/voiceinput.sh bootstrap --audio-file testdata/smoke.wav`
 
 ## 推荐推进顺序
@@ -165,7 +169,7 @@ Ubuntu 20.04 上优先用 IBus 跑通最小闭环。
 - `libasound2-dev`
 - `portaudio19-dev`
 
-先跑 `scripts/voiceinput.sh linux smoke --audio-file testdata/smoke.wav`。
+先跑 `cargo run -p voice-input-cli --features linux-ibus-smoke -- smoke linux --audio-file testdata/smoke.wav --backend ibus`。
 
 常驻版可以直接用 `scripts/voiceinput.sh linux install` 启动。
 

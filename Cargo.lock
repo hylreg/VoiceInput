@@ -1623,6 +1623,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "hound",
+ "serde",
  "serde_json",
  "tempfile",
  "voice-input-core",
@@ -1641,7 +1642,10 @@ dependencies = [
 name = "voice-input-cli"
 version = "0.1.0"
 dependencies = [
- "voice-input-core",
+ "voice-input-linux",
+ "voice-input-macos",
+ "voice-input-runtime",
+ "voice-input-windows",
 ]
 
 [[package]]

@@ -120,3 +120,11 @@ pub fn backend_from_kind(kind: LinuxBackendKind) -> Box<dyn LinuxBackend> {
         LinuxBackendKind::Fcitx5 => Box::new(Fcitx5Backend),
     }
 }
+
+pub fn parse_backend_kind(value: &str) -> std::result::Result<LinuxBackendKind, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "ibus" => Ok(LinuxBackendKind::IBus),
+        "fcitx5" | "fcitx" => Ok(LinuxBackendKind::Fcitx5),
+        other => Err(format!("不支持的 Linux 后端：{other}")),
+    }
+}

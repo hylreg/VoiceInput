@@ -5,7 +5,6 @@ mod mac_runtime {
     use std::fs::{File, OpenOptions};
     use std::io::Write;
     use std::os::raw::c_void;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
@@ -31,8 +30,12 @@ mod mac_runtime {
     use crate::bridge::{ClipboardMacImeBridge, MacImeBridge};
     use crate::host::{MacHostConfig, MacInputMethodHost};
     use crate::recorder::MicAudioRecorder;
-    use voice_input_asr::{FunAsrConfig, PythonFunAsrRunner};
-    use voice_input_core::{AppConfig, AppController, MockHotkeyManager, Result, VoiceInputError};
+    use voice_input_asr::FunAsrConfig;
+    use voice_input_core::{AppConfig, AppController, Result, VoiceInputError};
+    use voice_input_runtime::{
+        build_python_live_controller, print_live_ready, run_controller_job,
+        run_logged_queued_live_job, QueuedLiveJobState,
+    };
 
     #[derive(Debug, Clone)]
     pub struct MacLiveAppConfig {
@@ -55,15 +58,9 @@ mod mac_runtime {
         }
     }
 
-    #[derive(Default)]
-    struct RuntimeState {
-        pending_start: AtomicBool,
-        job_active: AtomicBool,
-    }
-
     struct MainLoopContext {
         controller: AppController,
-        state: Arc<RuntimeState>,
+        state: Arc<QueuedLiveJobState>,
     }
 
     struct SingleInstanceGuard {
@@ -310,23 +307,22 @@ mod mac_runtime {
             let bridge: Box<dyn MacImeBridge> = Box::new(ClipboardMacImeBridge::default());
             let host = MacInputMethodHost::new_with_bridge(config.host.clone(), bridge);
             println!("正在预加载 ASR 模型...");
-            let asr_runner = PythonFunAsrRunner::connect(config.asr.clone())?;
-            println!("ASR 模型预加载完成");
-            println!("VoiceInput 常驻应用已启动");
-            println!("热键：{}", config.app.activation_hotkey);
-            println!("说明：按一次开始录音，按一次停止并转写");
-            let transcriber =
-                voice_input_asr::LocalFunAsrTranscriber::new(config.asr, Box::new(asr_runner));
-            let controller = AppController::new(
+            let controller = build_python_live_controller(
                 config.app,
-                Box::new(MockHotkeyManager),
+                config.asr,
                 Box::new(recorder.clone()),
-                Box::new(transcriber),
                 Box::new(host),
+            )?;
+            println!("ASR 模型预加载完成");
+            print_live_ready(
+                "macOS",
+                &controller.config.activation_hotkey,
+                "按一次开始录音，按一次停止并转写",
+                std::iter::empty::<&str>(),
             );
 
             let hotkey = HotkeySpec::parse(&controller.config.activation_hotkey)?;
-            let state = Arc::new(RuntimeState::default());
+            let state = Arc::new(QueuedLiveJobState::default());
 
             spawn_hotkey_listener(hotkey, state.clone(), recorder.clone())?;
 
@@ -356,7 +352,7 @@ mod mac_runtime {
 
     fn spawn_hotkey_listener(
         hotkey: HotkeySpec,
-        state: Arc<RuntimeState>,
+        state: Arc<QueuedLiveJobState>,
         recorder: MicAudioRecorder,
     ) -> Result<()> {
         let handle = thread::Builder::new()
@@ -386,14 +382,14 @@ mod mac_runtime {
                             return None;
                         }
 
-                        if state.job_active.load(Ordering::SeqCst) {
+                        if state.is_active() {
                             if recorder.is_recording() {
                                 println!("收到停止热键");
                                 recorder.stop();
                             }
                         } else {
                             println!("收到启动热键");
-                            state.pending_start.store(true, Ordering::SeqCst);
+                            state.request_start();
                         }
 
                         None
@@ -431,26 +427,15 @@ mod mac_runtime {
         }
 
         let context: &mut MainLoopContext = unsafe { &mut *(raw_info as *mut MainLoopContext) };
-        if !context.state.pending_start.swap(false, Ordering::SeqCst) {
-            return;
-        }
-
-        if context.state.job_active.swap(true, Ordering::SeqCst) {
-            return;
-        }
-
-        println!("开始录音并等待停止热键");
-        let result = context.controller.process_once();
-        match result {
-            Ok(text) => {
-                println!("识别完成：{text}");
-            }
-            Err(err) => {
-                eprintln!("实时语音输入失败：{err}");
-            }
-        }
-
-        context.state.job_active.store(false, Ordering::SeqCst);
+        run_logged_queued_live_job(
+            &context.state,
+            "识别完成：",
+            "实时语音输入失败：",
+            || {
+                println!("开始录音并等待停止热键");
+                run_controller_job(&context.controller)
+            },
+        );
     }
 }
 
