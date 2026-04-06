@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use voice_input_asr::{FunAsrConfig, PythonFunAsrRunner};
 use voice_input_core::{AppConfig, MockHotkeyManager};
+use voice_input_runtime::LocalVoiceInputConfig;
 use voice_input_windows::{
     ClipboardWindowsImeBridge, FileAudioRecorder, WindowsHostConfig, WindowsLocalVoiceInput,
     WindowsLocalVoiceInputConfig,
@@ -33,9 +34,11 @@ fn main() {
 
     let pipeline = WindowsLocalVoiceInput::new(
         WindowsLocalVoiceInputConfig {
-            app: AppConfig::default(),
+            runtime: LocalVoiceInputConfig {
+                app: AppConfig::default(),
+                asr: asr_config,
+            },
             host: WindowsHostConfig::default(),
-            asr: asr_config,
         },
         Box::new(MockHotkeyManager),
         Box::new(FileAudioRecorder::new(args.audio_file)),

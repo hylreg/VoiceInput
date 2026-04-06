@@ -1,28 +1,31 @@
 use crate::bridge::WindowsImeBridge;
 use crate::host::{WindowsHostConfig, WindowsInputMethodHost};
-use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber};
-use voice_input_core::{AppConfig, AppController, AudioRecorder, HotkeyManager};
+use voice_input_asr::FunAsrRunner;
+use voice_input_core::{AudioRecorder, HotkeyManager};
+use voice_input_runtime::{LocalRuntimeMetadata, LocalVoiceInputConfig, LocalVoiceInputRuntime};
 
 #[derive(Debug, Clone)]
 pub struct WindowsLocalVoiceInputConfig {
-    pub app: AppConfig,
+    pub runtime: LocalVoiceInputConfig,
     pub host: WindowsHostConfig,
-    pub asr: FunAsrConfig,
 }
 
 impl Default for WindowsLocalVoiceInputConfig {
     fn default() -> Self {
         Self {
-            app: AppConfig::default(),
+            runtime: LocalVoiceInputConfig::default(),
             host: WindowsHostConfig::default(),
-            asr: FunAsrConfig::from_env(),
         }
     }
 }
 
 pub struct WindowsLocalVoiceInput {
-    controller: AppController,
-    app_id: String,
+    inner: LocalVoiceInputRuntime<WindowsLocalMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WindowsLocalMetadata {
+    pub app_id: String,
 }
 
 impl WindowsLocalVoiceInput {
@@ -35,23 +38,29 @@ impl WindowsLocalVoiceInput {
     ) -> Self {
         let host = WindowsInputMethodHost::new_with_bridge(config.host, bridge);
         let app_id = host.app_id().to_string();
-        let transcriber = LocalFunAsrTranscriber::new(config.asr, runner);
-        let controller = AppController::new(
-            config.app,
+        let inner = LocalVoiceInputRuntime::new(
+            config.runtime,
             hotkeys,
             recorder,
-            Box::new(transcriber),
+            runner,
             Box::new(host),
+            WindowsLocalMetadata { app_id },
         );
 
-        Self { controller, app_id }
+        Self { inner }
     }
 
     pub fn run_once(&self) -> voice_input_core::Result<String> {
-        self.controller.run_demo()
+        self.inner.run_once()
     }
 
     pub fn app_id(&self) -> &str {
+        &self.inner.metadata().app_id
+    }
+}
+
+impl LocalRuntimeMetadata for WindowsLocalMetadata {
+    fn label(&self) -> &str {
         &self.app_id
     }
 }

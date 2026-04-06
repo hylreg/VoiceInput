@@ -7,6 +7,7 @@ use voice_input_macos::{
     FileAudioRecorder, MacHostConfig, MacLocalVoiceInput, MacLocalVoiceInputConfig,
     MockMacImeBridge,
 };
+use voice_input_runtime::LocalVoiceInputConfig;
 
 fn main() {
     let audio_path = match parse_audio_path(env::args().collect()) {
@@ -31,9 +32,11 @@ fn main() {
 
     let pipeline = MacLocalVoiceInput::new(
         MacLocalVoiceInputConfig {
-            app: AppConfig::default(),
+            runtime: LocalVoiceInputConfig {
+                app: AppConfig::default(),
+                asr: asr_config,
+            },
             host: MacHostConfig::default(),
-            asr: asr_config,
         },
         Box::new(MockHotkeyManager),
         Box::new(FileAudioRecorder::new(audio_path)),

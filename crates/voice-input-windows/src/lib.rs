@@ -3,7 +3,6 @@ mod host;
 mod local;
 mod recorder;
 mod runtime;
-mod session;
 
 pub use bridge::{
     ClipboardWindowsImeBridge, MockWindowsImeBridge, UnwiredWindowsImeBridge, WindowsImeBridge,
@@ -13,4 +12,3 @@ pub use host::{WindowsHostConfig, WindowsInputMethodHost};
 pub use local::{WindowsLocalVoiceInput, WindowsLocalVoiceInputConfig};
 pub use recorder::{FileAudioRecorder, WindowsMicAudioRecorder};
 pub use runtime::{run_live_app, WindowsLiveAppConfig};
-pub use session::WindowsCompositionSession;

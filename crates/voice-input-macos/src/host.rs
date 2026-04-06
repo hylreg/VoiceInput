@@ -1,6 +1,6 @@
 use crate::bridge::{MacImeBridge, UnwiredMacImeBridge};
-use crate::session::MacCompositionSession;
 use voice_input_core::{InputMethodHost, Result};
+use voice_input_runtime::{CompositionDriver, StatefulInputMethodHost};
 
 #[derive(Debug, Clone)]
 pub struct MacHostConfig {
@@ -19,8 +19,11 @@ impl Default for MacHostConfig {
 
 pub struct MacInputMethodHost {
     config: MacHostConfig,
+    inner: StatefulInputMethodHost<MacHostDriver>,
+}
+
+struct MacHostDriver {
     bridge: Box<dyn MacImeBridge>,
-    session: std::cell::RefCell<MacCompositionSession>,
 }
 
 impl MacInputMethodHost {
@@ -31,8 +34,7 @@ impl MacInputMethodHost {
     pub fn new_with_bridge(config: MacHostConfig, bridge: Box<dyn MacImeBridge>) -> Self {
         Self {
             config,
-            bridge,
-            session: std::cell::RefCell::new(MacCompositionSession::default()),
+            inner: StatefulInputMethodHost::new(MacHostDriver { bridge }),
         }
     }
 
@@ -41,17 +43,13 @@ impl MacInputMethodHost {
     }
 }
 
-impl InputMethodHost for MacInputMethodHost {
+impl CompositionDriver for MacHostDriver {
     fn start_composition(&self) -> Result<()> {
-        self.bridge.start_composition()?;
-        self.session.borrow_mut().inner.start();
-        Ok(())
+        self.bridge.start_composition()
     }
 
     fn update_preedit(&self, text: &str) -> Result<()> {
-        self.bridge.update_preedit(text)?;
-        self.session.borrow_mut().inner.update(text);
-        Ok(())
+        self.bridge.update_preedit(text)
     }
 
     fn show_recording_indicator(&self) -> Result<()> {
@@ -63,18 +61,44 @@ impl InputMethodHost for MacInputMethodHost {
     }
 
     fn commit_text(&self, text: &str) -> Result<()> {
-        self.bridge.commit_text(text)?;
-        self.session.borrow_mut().inner.commit(text);
-        Ok(())
+        self.bridge.commit_text(text)
     }
 
     fn cancel_composition(&self) -> Result<()> {
-        self.bridge.cancel_composition()?;
-        self.session.borrow_mut().inner.cancel();
-        Ok(())
+        self.bridge.cancel_composition()
     }
 
     fn end_composition(&self) -> Result<()> {
         self.bridge.end_composition()
+    }
+}
+
+impl InputMethodHost for MacInputMethodHost {
+    fn start_composition(&self) -> Result<()> {
+        self.inner.start_composition()
+    }
+
+    fn update_preedit(&self, text: &str) -> Result<()> {
+        self.inner.update_preedit(text)
+    }
+
+    fn show_recording_indicator(&self) -> Result<()> {
+        self.inner.show_recording_indicator()
+    }
+
+    fn clear_recording_indicator(&self) -> Result<()> {
+        self.inner.clear_recording_indicator()
+    }
+
+    fn commit_text(&self, text: &str) -> Result<()> {
+        self.inner.commit_text(text)
+    }
+
+    fn cancel_composition(&self) -> Result<()> {
+        self.inner.cancel_composition()
+    }
+
+    fn end_composition(&self) -> Result<()> {
+        self.inner.end_composition()
     }
 }

@@ -1,6 +1,6 @@
 use crate::backend::{backend_from_kind, LinuxBackend, LinuxBackendKind};
-use crate::session::LinuxCompositionSession;
 use voice_input_core::{InputMethodHost, Result};
+use voice_input_runtime::{CompositionDriver, StatefulInputMethodHost};
 
 #[derive(Debug, Clone)]
 pub struct LinuxHostConfig {
@@ -19,8 +19,11 @@ impl Default for LinuxHostConfig {
 
 pub struct LinuxInputMethodHost {
     config: LinuxHostConfig,
+    inner: StatefulInputMethodHost<LinuxHostDriver>,
+}
+
+struct LinuxHostDriver {
     backend: Box<dyn LinuxBackend>,
-    session: std::cell::RefCell<LinuxCompositionSession>,
 }
 
 impl LinuxInputMethodHost {
@@ -30,12 +33,9 @@ impl LinuxInputMethodHost {
     }
 
     pub fn new_with_backend(config: LinuxHostConfig, backend: Box<dyn LinuxBackend>) -> Self {
-        let session = LinuxCompositionSession::new(config.service_name.clone());
-
         Self {
             config,
-            backend,
-            session: std::cell::RefCell::new(session),
+            inner: StatefulInputMethodHost::new(LinuxHostDriver { backend }),
         }
     }
 
@@ -44,32 +44,46 @@ impl LinuxInputMethodHost {
     }
 }
 
-impl InputMethodHost for LinuxInputMethodHost {
+impl CompositionDriver for LinuxHostDriver {
     fn start_composition(&self) -> Result<()> {
-        self.backend.start()?;
-        self.session.borrow_mut().start();
-        Ok(())
+        self.backend.start()
     }
 
     fn update_preedit(&self, text: &str) -> Result<()> {
-        self.backend.update_preedit(text)?;
-        self.session.borrow_mut().update(text);
-        Ok(())
+        self.backend.update_preedit(text)
     }
 
     fn commit_text(&self, text: &str) -> Result<()> {
-        self.backend.commit_text(text)?;
-        self.session.borrow_mut().commit(text);
-        Ok(())
+        self.backend.commit_text(text)
     }
 
     fn cancel_composition(&self) -> Result<()> {
-        self.backend.cancel()?;
-        self.session.borrow_mut().cancel();
-        Ok(())
+        self.backend.cancel()
     }
 
     fn end_composition(&self) -> Result<()> {
         self.backend.stop()
+    }
+}
+
+impl InputMethodHost for LinuxInputMethodHost {
+    fn start_composition(&self) -> Result<()> {
+        self.inner.start_composition()
+    }
+
+    fn update_preedit(&self, text: &str) -> Result<()> {
+        self.inner.update_preedit(text)
+    }
+
+    fn commit_text(&self, text: &str) -> Result<()> {
+        self.inner.commit_text(text)
+    }
+
+    fn cancel_composition(&self) -> Result<()> {
+        self.inner.cancel_composition()
+    }
+
+    fn end_composition(&self) -> Result<()> {
+        self.inner.end_composition()
     }
 }

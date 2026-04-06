@@ -1630,6 +1630,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "voice-input-audio"
+version = "0.1.0"
+dependencies = [
+ "hound",
+ "voice-input-core",
+]
+
+[[package]]
 name = "voice-input-cli"
 version = "0.1.0"
 dependencies = [
@@ -1653,7 +1661,9 @@ dependencies = [
  "serde",
  "toml",
  "voice-input-asr",
+ "voice-input-audio",
  "voice-input-core",
+ "voice-input-runtime",
 ]
 
 [[package]]
@@ -1669,6 +1679,16 @@ dependencies = [
  "hound",
  "objc",
  "voice-input-asr",
+ "voice-input-audio",
+ "voice-input-core",
+ "voice-input-runtime",
+]
+
+[[package]]
+name = "voice-input-runtime"
+version = "0.1.0"
+dependencies = [
+ "voice-input-asr",
  "voice-input-core",
 ]
 
@@ -1680,7 +1700,9 @@ dependencies = [
  "cpal",
  "hound",
  "voice-input-asr",
+ "voice-input-audio",
  "voice-input-core",
+ "voice-input-runtime",
  "windows-sys 0.59.0",
 ]
 

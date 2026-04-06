@@ -10,8 +10,10 @@ ibus = ["dep:ibus"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+voice-input-audio = { path = "../voice-input-audio" }
 voice-input-asr = { path = "../voice-input-asr" }
 voice-input-core = { path = "../voice-input-core" }
+voice-input-runtime = { path = "../voice-input-runtime" }
 ibus = { version = "0.2", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

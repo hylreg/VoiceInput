@@ -1,6 +1,6 @@
 use crate::bridge::{UnwiredWindowsImeBridge, WindowsImeBridge};
-use crate::session::WindowsCompositionSession;
 use voice_input_core::{InputMethodHost, Result};
+use voice_input_runtime::{CompositionDriver, StatefulInputMethodHost};
 
 #[derive(Debug, Clone)]
 pub struct WindowsHostConfig {
@@ -19,8 +19,11 @@ impl Default for WindowsHostConfig {
 
 pub struct WindowsInputMethodHost {
     config: WindowsHostConfig,
+    inner: StatefulInputMethodHost<WindowsHostDriver>,
+}
+
+struct WindowsHostDriver {
     bridge: Box<dyn WindowsImeBridge>,
-    session: std::cell::RefCell<WindowsCompositionSession>,
 }
 
 impl WindowsInputMethodHost {
@@ -31,8 +34,7 @@ impl WindowsInputMethodHost {
     pub fn new_with_bridge(config: WindowsHostConfig, bridge: Box<dyn WindowsImeBridge>) -> Self {
         Self {
             config,
-            bridge,
-            session: std::cell::RefCell::new(WindowsCompositionSession::default()),
+            inner: StatefulInputMethodHost::new(WindowsHostDriver { bridge }),
         }
     }
 
@@ -41,32 +43,46 @@ impl WindowsInputMethodHost {
     }
 }
 
-impl InputMethodHost for WindowsInputMethodHost {
+impl CompositionDriver for WindowsHostDriver {
     fn start_composition(&self) -> Result<()> {
-        self.bridge.start_composition()?;
-        self.session.borrow_mut().state.start();
-        Ok(())
+        self.bridge.start_composition()
     }
 
     fn update_preedit(&self, text: &str) -> Result<()> {
-        self.bridge.update_preedit(text)?;
-        self.session.borrow_mut().state.update(text);
-        Ok(())
+        self.bridge.update_preedit(text)
     }
 
     fn commit_text(&self, text: &str) -> Result<()> {
-        self.bridge.commit_text(text)?;
-        self.session.borrow_mut().state.commit(text);
-        Ok(())
+        self.bridge.commit_text(text)
     }
 
     fn cancel_composition(&self) -> Result<()> {
-        self.bridge.cancel_composition()?;
-        self.session.borrow_mut().state.cancel();
-        Ok(())
+        self.bridge.cancel_composition()
     }
 
     fn end_composition(&self) -> Result<()> {
         self.bridge.end_composition()
+    }
+}
+
+impl InputMethodHost for WindowsInputMethodHost {
+    fn start_composition(&self) -> Result<()> {
+        self.inner.start_composition()
+    }
+
+    fn update_preedit(&self, text: &str) -> Result<()> {
+        self.inner.update_preedit(text)
+    }
+
+    fn commit_text(&self, text: &str) -> Result<()> {
+        self.inner.commit_text(text)
+    }
+
+    fn cancel_composition(&self) -> Result<()> {
+        self.inner.cancel_composition()
+    }
+
+    fn end_composition(&self) -> Result<()> {
+        self.inner.end_composition()
     }
 }

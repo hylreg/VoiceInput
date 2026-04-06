@@ -3,6 +3,7 @@ use voice_input_core::{MockAudioRecorder, MockHotkeyManager};
 use voice_input_macos::{
     MacHostConfig, MacImeEvent, MacLocalVoiceInput, MacLocalVoiceInputConfig, MockMacImeBridge,
 };
+use voice_input_runtime::LocalVoiceInputConfig;
 
 #[test]
 fn local_mac_pipeline_uses_funasr_and_drives_ime_events() {
@@ -15,9 +16,11 @@ fn local_mac_pipeline_uses_funasr_and_drives_ime_events() {
     let calls = runner.calls.clone();
     let pipeline = MacLocalVoiceInput::new(
         MacLocalVoiceInputConfig {
+            runtime: LocalVoiceInputConfig {
+                app: voice_input_core::AppConfig::default(),
+                asr: FunAsrConfig::default(),
+            },
             host: MacHostConfig::default(),
-            asr: FunAsrConfig::default(),
-            app: voice_input_core::AppConfig::default(),
         },
         Box::new(MockHotkeyManager),
         Box::new(MockAudioRecorder),

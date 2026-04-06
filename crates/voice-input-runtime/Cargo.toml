@@ -1,0 +1,8 @@
+[package]
+name = "voice-input-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+voice-input-asr = { path = "../voice-input-asr" }
+voice-input-core = { path = "../voice-input-core" }

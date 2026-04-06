@@ -7,6 +7,7 @@ use voice_input_linux::{
     FileAudioRecorder, LinuxBackend, LinuxBackendKind, LinuxHostConfig, LinuxLocalVoiceInput,
     LinuxLocalVoiceInputConfig,
 };
+use voice_input_runtime::LocalVoiceInputConfig;
 
 fn main() {
     let args = match Args::parse(env::args().collect()) {
@@ -41,12 +42,14 @@ fn main() {
 
     let pipeline = LinuxLocalVoiceInput::new(
         LinuxLocalVoiceInputConfig {
-            app: AppConfig::default(),
+            runtime: LocalVoiceInputConfig {
+                app: AppConfig::default(),
+                asr: asr_config,
+            },
             host: LinuxHostConfig {
                 backend: args.backend,
                 service_name: "voice-input".to_string(),
             },
-            asr: asr_config,
         },
         Box::new(MockHotkeyManager),
         Box::new(FileAudioRecorder::new(args.audio_file)),

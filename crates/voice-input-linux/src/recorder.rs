@@ -1,32 +1,23 @@
-use std::io::Cursor;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use std::sync::atomic::AtomicBool;
+
+#[cfg(target_os = "linux")]
+use std::sync::atomic::Ordering;
+#[cfg(not(target_os = "linux"))]
+use std::sync::Arc;
+#[cfg(target_os = "linux")]
+use std::sync::{Arc, Condvar, Mutex};
+#[cfg(target_os = "linux")]
+use std::time::Instant;
+
+pub use voice_input_audio::FileAudioRecorder;
 use voice_input_core::{AudioRecorder, Result, VoiceInputError};
 
-#[derive(Debug, Clone)]
-pub struct FileAudioRecorder {
-    path: std::path::PathBuf,
-}
-
-impl FileAudioRecorder {
-    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
-        Self { path: path.into() }
-    }
-
-    pub fn path(&self) -> &std::path::PathBuf {
-        &self.path
-    }
-}
-
-impl AudioRecorder for FileAudioRecorder {
-    fn record_once(&self) -> Result<Vec<u8>> {
-        std::fs::read(&self.path).map_err(|e| {
-            VoiceInputError::Audio(format!("读取音频文件失败 {}：{e}", self.path.display()))
-        })
-    }
-}
+#[cfg(target_os = "linux")]
+use voice_input_audio::{
+    has_voice_activity, push_mono_i16_f32, push_mono_i16_i16, push_mono_i16_u16, write_pcm_wav,
+};
 
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone)]
@@ -270,101 +261,8 @@ impl AudioRecorder for LinuxMicAudioRecorder {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn has_voice_activity(samples: &[i16]) -> bool {
-    const RMS_THRESHOLD: f64 = 450.0;
-    if samples.is_empty() {
-        return false;
-    }
-
-    let energy = samples
-        .iter()
-        .map(|sample| {
-            let value = i64::from(*sample);
-            value * value
-        })
-        .sum::<i64>() as f64
-        / samples.len() as f64;
-
-    energy.sqrt() >= RMS_THRESHOLD
-}
-
-#[cfg(target_os = "linux")]
-fn push_mono_i16_f32(data: &[f32], channels: usize, sink: &Arc<Mutex<Vec<i16>>>) {
-    if channels == 0 {
-        return;
-    }
-
-    if let Ok(mut buffer) = sink.lock() {
-        for frame in data.chunks(channels) {
-            let sum = frame.iter().copied().sum::<f32>();
-            let mono = (sum / frame.len() as f32).clamp(-1.0, 1.0);
-            buffer.push((mono * i16::MAX as f32) as i16);
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn push_mono_i16_i16(data: &[i16], channels: usize, sink: &Arc<Mutex<Vec<i16>>>) {
-    if channels == 0 {
-        return;
-    }
-
-    if let Ok(mut buffer) = sink.lock() {
-        for frame in data.chunks(channels) {
-            let sum = frame.iter().map(|sample| i32::from(*sample)).sum::<i32>();
-            let mono = (sum / frame.len() as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-            buffer.push(mono);
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn push_mono_i16_u16(data: &[u16], channels: usize, sink: &Arc<Mutex<Vec<i16>>>) {
-    if channels == 0 {
-        return;
-    }
-
-    if let Ok(mut buffer) = sink.lock() {
-        for frame in data.chunks(channels) {
-            let sum = frame.iter().map(|sample| i32::from(*sample)).sum::<i32>();
-            let avg = sum / frame.len() as i32;
-            let mono = (avg - 32768).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-            buffer.push(mono);
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn write_pcm_wav(samples: &[i16], sample_rate: u32) -> Result<Vec<u8>> {
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-
-    let mut cursor = Cursor::new(Vec::new());
-    {
-        let mut writer = hound::WavWriter::new(&mut cursor, spec)
-            .map_err(|e| VoiceInputError::Audio(format!("创建 WAV 写入器失败：{e}")))?;
-
-        for sample in samples {
-            writer
-                .write_sample(*sample)
-                .map_err(|e| VoiceInputError::Audio(format!("写入 WAV 采样失败：{e}")))?;
-        }
-
-        writer
-            .finalize()
-            .map_err(|e| VoiceInputError::Audio(format!("完成 WAV 写入失败：{e}")))?;
-    }
-
-    Ok(cursor.into_inner())
-}
-
 #[cfg(not(target_os = "linux"))]
-#[derive(Clone, Default, Debug)]
+#[derive(Debug, Clone)]
 pub struct LinuxMicAudioRecorder;
 
 #[cfg(not(target_os = "linux"))]
@@ -378,11 +276,28 @@ impl LinuxMicAudioRecorder {
     pub fn is_recording(&self) -> bool {
         false
     }
+
+    pub fn record_once_with_chunks<F>(
+        &self,
+        _chunk_interval: Duration,
+        _silence_stop_timeout: Duration,
+        _silence_stop_enabled: Arc<AtomicBool>,
+        _on_snapshot: F,
+    ) -> Result<Vec<u8>>
+    where
+        F: FnMut(u32, Vec<i16>, bool),
+    {
+        Err(VoiceInputError::Audio(
+            "Linux 麦克风录音只支持 Linux".to_string(),
+        ))
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
 impl AudioRecorder for LinuxMicAudioRecorder {
     fn record_once(&self) -> Result<Vec<u8>> {
-        Err(VoiceInputError::Audio("麦克风录音只支持 Linux".to_string()))
+        Err(VoiceInputError::Audio(
+            "Linux 麦克风录音只支持 Linux".to_string(),
+        ))
     }
 }

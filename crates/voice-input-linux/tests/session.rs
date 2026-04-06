@@ -6,6 +6,7 @@ use voice_input_linux::{
     LinuxInputMethodHost, LinuxLiveAppConfig, LinuxLocalVoiceInput, LinuxLocalVoiceInputConfig,
     MockIbusBridge, MockLinuxBackend,
 };
+use voice_input_runtime::LocalVoiceInputConfig;
 
 #[test]
 fn session_tracks_composition_state() {
@@ -105,12 +106,14 @@ fn local_voice_input_wires_linux_host_and_asr_pipeline() {
     };
     let pipeline = LinuxLocalVoiceInput::new(
         LinuxLocalVoiceInputConfig {
-            app: AppConfig::default(),
+            runtime: LocalVoiceInputConfig {
+                app: AppConfig::default(),
+                asr: voice_input_asr::FunAsrConfig::default(),
+            },
             host: LinuxHostConfig {
                 backend: LinuxBackendKind::IBus,
                 service_name: "voice-input".to_string(),
             },
-            asr: voice_input_asr::FunAsrConfig::default(),
         },
         Box::new(MockHotkeyManager),
         Box::new(MockAudioRecorder),

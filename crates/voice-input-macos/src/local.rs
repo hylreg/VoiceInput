@@ -1,27 +1,30 @@
 use crate::bridge::MacImeBridge;
 use crate::host::{MacHostConfig, MacInputMethodHost};
-use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber};
-use voice_input_core::{AppConfig, AppController, AudioRecorder, HotkeyManager};
+use voice_input_asr::FunAsrRunner;
+use voice_input_core::{AudioRecorder, HotkeyManager};
+use voice_input_runtime::{LocalRuntimeMetadata, LocalVoiceInputConfig, LocalVoiceInputRuntime};
 
 pub struct MacLocalVoiceInputConfig {
-    pub app: AppConfig,
+    pub runtime: LocalVoiceInputConfig,
     pub host: MacHostConfig,
-    pub asr: FunAsrConfig,
 }
 
 impl Default for MacLocalVoiceInputConfig {
     fn default() -> Self {
         Self {
-            app: AppConfig::default(),
+            runtime: LocalVoiceInputConfig::default(),
             host: MacHostConfig::default(),
-            asr: FunAsrConfig::from_env(),
         }
     }
 }
 
 pub struct MacLocalVoiceInput {
-    controller: AppController,
-    bundle_id: String,
+    inner: LocalVoiceInputRuntime<MacLocalMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MacLocalMetadata {
+    pub bundle_id: String,
 }
 
 impl MacLocalVoiceInput {
@@ -34,30 +37,33 @@ impl MacLocalVoiceInput {
     ) -> Self {
         let host = MacInputMethodHost::new_with_bridge(config.host, bridge);
         let bundle_id = host.bundle_id().to_string();
-        let transcriber = LocalFunAsrTranscriber::new(config.asr, runner);
-        let controller = AppController::new(
-            config.app,
+        let inner = LocalVoiceInputRuntime::new(
+            config.runtime,
             hotkeys,
             recorder,
-            Box::new(transcriber),
+            runner,
             Box::new(host),
+            MacLocalMetadata { bundle_id },
         );
 
-        Self {
-            controller,
-            bundle_id,
-        }
+        Self { inner }
     }
 
-    pub fn controller(&self) -> &AppController {
-        &self.controller
+    pub fn controller(&self) -> &voice_input_core::AppController {
+        self.inner.controller()
     }
 
     pub fn run_once(&self) -> voice_input_core::Result<String> {
-        self.controller.run_demo()
+        self.inner.run_once()
     }
 
     pub fn host_bundle_id(&self) -> &str {
+        &self.inner.metadata().bundle_id
+    }
+}
+
+impl LocalRuntimeMetadata for MacLocalMetadata {
+    fn label(&self) -> &str {
         &self.bundle_id
     }
 }

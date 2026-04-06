@@ -1,5 +1,6 @@
 use voice_input_asr::MockFunAsrRunner;
 use voice_input_core::{AppConfig, MockAudioRecorder, MockHotkeyManager};
+use voice_input_runtime::LocalVoiceInputConfig;
 use voice_input_windows::{
     MockWindowsImeBridge, WindowsHostConfig, WindowsImeEvent, WindowsLocalVoiceInput,
     WindowsLocalVoiceInputConfig,
@@ -15,9 +16,11 @@ fn local_voice_input_wires_windows_host_and_asr_pipeline() {
     };
     let pipeline = WindowsLocalVoiceInput::new(
         WindowsLocalVoiceInputConfig {
-            app: AppConfig::default(),
+            runtime: LocalVoiceInputConfig {
+                app: AppConfig::default(),
+                asr: voice_input_asr::FunAsrConfig::default(),
+            },
             host: WindowsHostConfig::default(),
-            asr: voice_input_asr::FunAsrConfig::default(),
         },
         Box::new(MockHotkeyManager),
         Box::new(MockAudioRecorder),

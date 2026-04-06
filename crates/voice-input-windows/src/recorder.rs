@@ -1,6 +1,4 @@
 #[cfg(target_os = "windows")]
-use std::io::Write;
-#[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "windows")]
 use std::sync::{Arc, Condvar, Mutex};
@@ -8,26 +6,11 @@ use std::time::Duration;
 #[cfg(target_os = "windows")]
 use std::time::Instant;
 
+pub use voice_input_audio::FileAudioRecorder;
 use voice_input_core::{AudioRecorder, Result, VoiceInputError};
 
-#[derive(Debug, Clone)]
-pub struct FileAudioRecorder {
-    path: std::path::PathBuf,
-}
-
-impl FileAudioRecorder {
-    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
-        Self { path: path.into() }
-    }
-}
-
-impl AudioRecorder for FileAudioRecorder {
-    fn record_once(&self) -> Result<Vec<u8>> {
-        std::fs::read(&self.path).map_err(|e| {
-            VoiceInputError::Audio(format!("读取音频文件失败 {}：{e}", self.path.display()))
-        })
-    }
-}
+#[cfg(target_os = "windows")]
+use voice_input_audio::{push_mono_i16_f32, push_mono_i16_i16, push_mono_i16_u16};
 
 #[cfg(target_os = "windows")]
 #[derive(Clone)]
@@ -202,76 +185,8 @@ impl AudioRecorder for WindowsMicAudioRecorder {
             return Err(VoiceInputError::Audio("没有录到有效音频".to_string()));
         }
 
-        Ok(write_pcm_wav(&captured, sample_rate))
+        voice_input_audio::write_pcm_wav(&captured, sample_rate)
     }
-}
-
-#[cfg(target_os = "windows")]
-fn push_mono_i16_f32(data: &[f32], channels: usize, sink: &Arc<Mutex<Vec<i16>>>) {
-    if channels == 0 {
-        return;
-    }
-
-    if let Ok(mut buffer) = sink.lock() {
-        for frame in data.chunks(channels) {
-            let sum = frame.iter().copied().sum::<f32>();
-            let mono = (sum / frame.len() as f32).clamp(-1.0, 1.0);
-            buffer.push((mono * i16::MAX as f32) as i16);
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn push_mono_i16_i16(data: &[i16], channels: usize, sink: &Arc<Mutex<Vec<i16>>>) {
-    if channels == 0 {
-        return;
-    }
-
-    if let Ok(mut buffer) = sink.lock() {
-        for frame in data.chunks(channels) {
-            let sum = frame.iter().map(|sample| i32::from(*sample)).sum::<i32>();
-            let mono = (sum / frame.len() as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-            buffer.push(mono);
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn push_mono_i16_u16(data: &[u16], channels: usize, sink: &Arc<Mutex<Vec<i16>>>) {
-    if channels == 0 {
-        return;
-    }
-
-    if let Ok(mut buffer) = sink.lock() {
-        for frame in data.chunks(channels) {
-            let sum = frame.iter().map(|sample| i32::from(*sample)).sum::<i32>();
-            let avg = sum / frame.len() as i32;
-            let mono = (avg - 32768).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-            buffer.push(mono);
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn write_pcm_wav(samples: &[i16], sample_rate: u32) -> Vec<u8> {
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-
-    let mut cursor = std::io::Cursor::new(Vec::new());
-    {
-        let mut writer = hound::WavWriter::new(&mut cursor, spec).expect("创建 WAV writer");
-        for sample in samples {
-            writer.write_sample(*sample).expect("写入 WAV sample");
-        }
-        writer.finalize().expect("完成 WAV 输出");
-    }
-
-    cursor.flush().expect("flush WAV cursor");
-    cursor.into_inner()
 }
 
 #[cfg(not(target_os = "windows"))]

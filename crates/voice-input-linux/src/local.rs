@@ -1,29 +1,32 @@
 use crate::backend::{LinuxBackend, LinuxBackendKind};
 use crate::host::{LinuxHostConfig, LinuxInputMethodHost};
-use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber};
-use voice_input_core::{AppConfig, AppController, AudioRecorder, HotkeyManager};
+use voice_input_asr::FunAsrRunner;
+use voice_input_core::{AudioRecorder, HotkeyManager};
+use voice_input_runtime::{LocalRuntimeMetadata, LocalVoiceInputConfig, LocalVoiceInputRuntime};
 
 #[derive(Debug, Clone)]
 pub struct LinuxLocalVoiceInputConfig {
-    pub app: AppConfig,
+    pub runtime: LocalVoiceInputConfig,
     pub host: LinuxHostConfig,
-    pub asr: FunAsrConfig,
 }
 
 impl Default for LinuxLocalVoiceInputConfig {
     fn default() -> Self {
         Self {
-            app: AppConfig::default(),
+            runtime: LocalVoiceInputConfig::default(),
             host: LinuxHostConfig::default(),
-            asr: FunAsrConfig::from_env(),
         }
     }
 }
 
 pub struct LinuxLocalVoiceInput {
-    controller: AppController,
-    backend_kind: LinuxBackendKind,
-    service_name: String,
+    inner: LocalVoiceInputRuntime<LinuxLocalMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LinuxLocalMetadata {
+    pub backend_kind: LinuxBackendKind,
+    pub service_name: String,
 }
 
 impl LinuxLocalVoiceInput {
@@ -37,31 +40,36 @@ impl LinuxLocalVoiceInput {
         let backend_kind = backend.kind();
         let service_name = config.host.service_name.clone();
         let host = LinuxInputMethodHost::new_with_backend(config.host, backend);
-        let transcriber = LocalFunAsrTranscriber::new(config.asr, runner);
-        let controller = AppController::new(
-            config.app,
+        let inner = LocalVoiceInputRuntime::new(
+            config.runtime,
             hotkeys,
             recorder,
-            Box::new(transcriber),
+            runner,
             Box::new(host),
+            LinuxLocalMetadata {
+                backend_kind,
+                service_name,
+            },
         );
 
-        Self {
-            controller,
-            backend_kind,
-            service_name,
-        }
+        Self { inner }
     }
 
     pub fn run_once(&self) -> voice_input_core::Result<String> {
-        self.controller.run_demo()
+        self.inner.run_once()
     }
 
     pub fn backend_kind(&self) -> LinuxBackendKind {
-        self.backend_kind
+        self.inner.metadata().backend_kind
     }
 
     pub fn service_name(&self) -> &str {
+        &self.inner.metadata().service_name
+    }
+}
+
+impl LocalRuntimeMetadata for LinuxLocalMetadata {
+    fn label(&self) -> &str {
         &self.service_name
     }
 }
