@@ -2,7 +2,7 @@
 
 #[cfg(target_os = "linux")]
 mod linux_runtime {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::env;
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,10 +19,10 @@ mod linux_runtime {
         FunAsrConfig, FunAsrRunner, FunAsrStreamingRunner, LocalFunAsrTranscriber,
         PythonFunAsrRunner, PythonFunAsrStreamingRunner, SocketFunAsrStreamingRunner,
     };
-    use voice_input_core::{AppConfig, InputMethodHost, Result};
+    use voice_input_core::{AppConfig, Result};
     use voice_input_runtime::{
         print_live_ready, run_streaming_live_cycle, stream_preview_chunk, LiveJobHandle,
-        LiveJobState, LivePreviewSession,
+        LiveJobState,
     };
 
     #[derive(Debug, Clone)]
@@ -112,8 +112,9 @@ mod linux_runtime {
             return Ok((Box::new(PythonFunAsrRunner::connect(config.clone())?), None));
         }
 
-        let runner = PythonFunAsrStreamingRunner::connect(config.clone())?;
-        Ok((Box::new(runner.clone()), Some(Box::new(runner))))
+        let runner = PythonFunAsrRunner::connect(config.clone())?;
+        let streaming_runner = PythonFunAsrStreamingRunner::connect(config.clone())?;
+        Ok((Box::new(runner), Some(Box::new(streaming_runner))))
     }
 
     fn run_recording_cycle(
@@ -132,17 +133,7 @@ mod linux_runtime {
 
         println!("正在录音...");
         let silence_stop_enabled = Arc::new(AtomicBool::new(true));
-        let mut recording_indicator_inserted = false;
-        let session = match LivePreviewSession::begin(host, recording_indicator_text) {
-            Ok(session) => session,
-            Err(err) => {
-                eprintln!("Linux 常驻输入失败：{err}");
-                if let Some(tray) = tray {
-                    tray.set_recording(false);
-                }
-                return Ok(false);
-            }
-        };
+        let recording_indicator_inserted = Cell::new(false);
         let preview_error = RefCell::new(None::<String>);
         let result = run_streaming_live_cycle(
             host,
@@ -153,7 +144,7 @@ mod linux_runtime {
                 if let Err(err) = type_recording_marker() {
                     eprintln!("Linux 常驻输入失败：录音状态图标插入失败：{err}");
                 } else {
-                    recording_indicator_inserted = true;
+                    recording_indicator_inserted.set(true);
                 }
 
                 let audio = recorder.record_once_with_chunks(
@@ -189,7 +180,7 @@ mod linux_runtime {
                     }
                 }
 
-                if recording_indicator_inserted {
+                if recording_indicator_inserted.get() {
                     backspace_in_active_window(RECORDING_MARKER.chars().count())?;
                 }
                 Ok(())
