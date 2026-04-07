@@ -1,8 +1,14 @@
+use std::time::Duration;
+
+#[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+#[cfg(target_os = "macos")]
+use std::time::Instant;
 
 pub use voice_input_audio::FileAudioRecorder;
+#[cfg(target_os = "macos")]
 use voice_input_audio::{push_mono_i16_f32, push_mono_i16_i16, push_mono_i16_u16};
 use voice_input_core::{AudioRecorder, Result, VoiceInputError};
 
