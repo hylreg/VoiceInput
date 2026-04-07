@@ -227,7 +227,7 @@ voiceinput_run_platform_live() {
 }
 
 voiceinput_ensure_linux_dev_deps() {
-  local required_packages=(
+  local -a required_packages=(
     pkg-config
     libdbus-1-dev
     libibus-1.0-dev
@@ -235,7 +235,7 @@ voiceinput_ensure_linux_dev_deps() {
     libasound2-dev
     portaudio19-dev
   )
-  local missing_packages=()
+  local -a missing_packages=()
 
   for package in "${required_packages[@]}"; do
     if ! dpkg -s "$package" >/dev/null 2>&1; then
@@ -427,7 +427,7 @@ EOF
 }
 
 voiceinput_bootstrap_impl() {
-  local deploy_args=()
+  local -a deploy_args=()
   local smoke_audio_file=""
 
   while [[ $# -gt 0 ]]; do
@@ -696,7 +696,7 @@ voiceinput_windows_install_impl() {
   local audio_file=""
   local run_smoke_after_bootstrap=false
   local run_live_app_after_bootstrap=true
-  local bootstrap_args=()
+  local -a bootstrap_args=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -772,7 +772,7 @@ EOF
 voiceinput_macos_install_impl() {
   local audio_file=""
   local run_smoke_before_launch=false
-  local bootstrap_args=()
+  local -a bootstrap_args=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -858,7 +858,7 @@ voiceinput_linux_install_impl() {
   local audio_file=""
   local run_smoke_after_bootstrap=false
   local run_live_app_after_bootstrap=true
-  local deploy_args=()
+  local -a deploy_args=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1126,7 +1126,7 @@ EOF
 }
 
 voiceinput_dev_install_macos_impl() {
-  local install_args=("$@")
+  local -a install_args=("$@")
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1159,7 +1159,7 @@ voiceinput_linux_dev_streaming_impl() {
   local run_prepare=false
   local restart_server=false
   local stop_server=false
-  local app_args=()
+  local -a app_args=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
