@@ -181,7 +181,7 @@ impl IbusEngineBridge for IbusClientBridge {
             .reset()
             .map_err(|e| VoiceInputError::Injection(format!("提交后 IBus reset 失败：{e}")))?;
 
-        if let Err(err) = insert_text_into_active_window(text) {
+        if let Err(err) = insert_text_into_active_window(text, None) {
             return Err(VoiceInputError::Injection(format!(
                 "Linux 文本提交失败：{err}"
             )));
@@ -370,7 +370,33 @@ impl crate::backend::LinuxBackend for IbusBackend {
 }
 
 #[cfg(feature = "ibus")]
-pub fn insert_text_into_active_window(text: &str) -> Result<()> {
+pub fn capture_active_window() -> Result<Option<String>> {
+    let output = Command::new("xdotool")
+        .arg("getwindowfocus")
+        .output()
+        .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let window_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if window_id.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(window_id))
+    }
+}
+
+#[cfg(feature = "ibus")]
+pub fn insert_text_into_active_window(text: &str, window_id: Option<&str>) -> Result<()> {
+    // xdotool type 无法正确处理中文等多字节字符，对纯 ASCII 文本才
+    // 优先使用打字方式（避免覆盖剪贴板），对非 ASCII 文本直接走剪贴板粘贴。
+    let is_ascii = text.chars().all(|c| c.is_ascii());
+    if is_ascii && type_text_in_active_window(text, window_id).is_ok() {
+        return Ok(());
+    }
+
     let mut clipboard = arboard::Clipboard::new()
         .map_err(|e| VoiceInputError::Injection(format!("打开系统剪贴板失败：{e}")))?;
     clipboard
@@ -393,13 +419,71 @@ pub fn insert_text_into_active_window(text: &str) -> Result<()> {
         }
     }
 
+    // 粘贴失败时回退到先聚焦窗口再试
+    if let Some(id) = window_id {
+        let _ = Command::new("xdotool")
+            .args(["windowfocus", "--sync", id])
+            .status();
+        thread::sleep(Duration::from_millis(40));
+
+        for shortcut in [
+            ["key", "--clearmodifiers", "Shift+Insert"],
+            ["key", "--clearmodifiers", "ctrl+v"],
+        ] {
+            let status = Command::new("xdotool")
+                .args(shortcut)
+                .status()
+                .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+
+            if status.success() {
+                return Ok(());
+            }
+        }
+    }
+
     Err(VoiceInputError::Injection(
         "xdotool 粘贴失败：Shift+Insert 和 ctrl+v 都未成功".to_string(),
     ))
 }
 
 #[cfg(feature = "ibus")]
-pub fn backspace_in_active_window(count: usize) -> Result<()> {
+pub fn type_text_in_active_window(text: &str, window_id: Option<&str>) -> Result<()> {
+    // 调用方已确保窗口是活动窗口（如录音周期开始时的 capture_active_window），
+    // 不要在此处调用 focus_window——xdotool windowfocus --sync 会抢占焦点，
+    // 导致目标应用光标闪烁或消失。
+
+    let status = Command::new("xdotool")
+        .args(["type", "--clearmodifiers", "--delay", "0", text])
+        .status()
+        .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+
+    if !status.success() {
+        // 如果直接打字失败（例如 Wayland），回退到用 windowfocus 聚焦后再试
+        if let Some(id) = window_id {
+            let _ = Command::new("xdotool")
+                .args(["windowfocus", "--sync", id])
+                .status();
+            thread::sleep(Duration::from_millis(40));
+        }
+
+        let status = Command::new("xdotool")
+            .args(["type", "--clearmodifiers", "--delay", "0", text])
+            .status()
+            .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+
+        if !status.success() {
+            return Err(VoiceInputError::Injection(format!(
+                "xdotool 输入失败，退出码：{status}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "ibus")]
+pub fn backspace_in_active_window(count: usize, window_id: Option<&str>) -> Result<()> {
+    // 不预先调用 focus_window——调用方已确保窗口是活动窗口。
     for _ in 0..count {
         let status = Command::new("xdotool")
             .args(["key", "--clearmodifiers", "BackSpace"])
@@ -407,9 +491,24 @@ pub fn backspace_in_active_window(count: usize) -> Result<()> {
             .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
 
         if !status.success() {
-            return Err(VoiceInputError::Injection(format!(
-                "xdotool 退格失败，退出码：{status}"
-            )));
+            // 退格失败（如 Wayland），先聚焦再重试一次
+            if let Some(id) = window_id {
+                let _ = Command::new("xdotool")
+                    .args(["windowfocus", "--sync", id])
+                    .status();
+                thread::sleep(Duration::from_millis(40));
+            }
+
+            let status = Command::new("xdotool")
+                .args(["key", "--clearmodifiers", "BackSpace"])
+                .status()
+                .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+
+            if !status.success() {
+                return Err(VoiceInputError::Injection(format!(
+                    "xdotool 退格失败，退出码：{status}"
+                )));
+            }
         }
     }
 
@@ -418,6 +517,18 @@ pub fn backspace_in_active_window(count: usize) -> Result<()> {
 
 #[cfg(not(feature = "ibus"))]
 #[allow(dead_code)]
-pub fn backspace_in_active_window(_count: usize) -> Result<()> {
+pub fn capture_active_window() -> Result<Option<String>> {
+    Ok(None)
+}
+
+#[cfg(not(feature = "ibus"))]
+#[allow(dead_code)]
+pub fn type_text_in_active_window(_text: &str, _window_id: Option<&str>) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(feature = "ibus"))]
+#[allow(dead_code)]
+pub fn backspace_in_active_window(_count: usize, _window_id: Option<&str>) -> Result<()> {
     Ok(())
 }
