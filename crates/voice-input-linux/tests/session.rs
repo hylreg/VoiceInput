@@ -31,10 +31,10 @@ fn host_uses_configured_backend() {
 }
 
 #[test]
-fn live_app_defaults_to_mac_like_hotkey() {
+fn live_app_defaults_to_double_ctrl_hotkey() {
     let config = LinuxLiveAppConfig::default();
 
-    assert_eq!(config.app.activation_hotkey, "Ctrl+Shift+Space");
+    assert_eq!(config.app.activation_hotkey, "DoubleCtrl");
 }
 
 #[test]
