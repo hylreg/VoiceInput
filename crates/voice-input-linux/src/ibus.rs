@@ -45,107 +45,34 @@ pub trait IbusEngineBridge {
 
 #[cfg(feature = "ibus")]
 pub struct IbusClientBridge {
+    #[allow(dead_code)]
     spec: IbusEngineSpec,
-    bus: ibus::Bus,
-    context: std::cell::RefCell<Option<ibus::InputContext>>,
-    tokens: std::cell::RefCell<Vec<ibus::dbus::channel::Token>>,
     events: Arc<Mutex<Vec<IbusEngineEvent>>>,
 }
 
 #[cfg(feature = "ibus")]
 impl IbusClientBridge {
     pub fn try_new(spec: IbusEngineSpec) -> Result<Self> {
-        let bus = ibus::Bus::new()
-            .map_err(|e| VoiceInputError::Injection(format!("连接 IBus 总线失败：{e}")))?;
-
+        // 不连接 IBus 总线、不创建输入上下文。
+        // VoiceInput 不是注册的 IBus 引擎，所有 IBus D-Bus
+        // 交互都会干扰目标应用的输入法光标状态。
         Ok(Self {
             spec,
-            bus,
-            context: std::cell::RefCell::new(None),
-            tokens: std::cell::RefCell::new(Vec::new()),
             events: Arc::new(Mutex::new(Vec::new())),
         })
-    }
-
-    fn ensure_context(&self) -> Result<()> {
-        if self.context.borrow().is_some() {
-            return Ok(());
-        }
-
-        let context = self
-            .bus
-            .create_input_context(&self.spec.engine_name)
-            .map_err(|e| VoiceInputError::Injection(format!("创建 IBus 输入上下文失败：{e}")))?;
-
-        context.set_capabilities(
-            ibus::Capabilites::PREEDIT_TEXT
-                | ibus::Capabilites::FOCUS
-                | ibus::Capabilites::SURROUNDING_TEXT,
-        );
-
-        let events = Arc::clone(&self.events);
-        let update_token = context
-            .on_update_preedit_text(move |signal, _, _| {
-                if let Ok(mut lock) = events.lock() {
-                    lock.push(IbusEngineEvent::UpdatePreedit(signal.text.into_string()));
-                }
-                ibus::AfterCallback::Keep
-            })
-            .map_err(|e| VoiceInputError::Injection(format!("订阅 IBus 预编辑更新失败：{e}")))?;
-
-        let events = Arc::clone(&self.events);
-        let commit_token = context
-            .on_commit_text(move |signal, _, _| {
-                if let Ok(mut lock) = events.lock() {
-                    lock.push(IbusEngineEvent::CommitText(signal.text.into_string()));
-                }
-                ibus::AfterCallback::Keep
-            })
-            .map_err(|e| VoiceInputError::Injection(format!("订阅 IBus 提交事件失败：{e}")))?;
-
-        let events = Arc::clone(&self.events);
-        let show_token = context
-            .on_show_preedit_text(move |_, _| {
-                if let Ok(mut lock) = events.lock() {
-                    lock.push(IbusEngineEvent::StartComposition);
-                }
-                ibus::AfterCallback::Keep
-            })
-            .map_err(|e| {
-                VoiceInputError::Injection(format!("订阅 IBus 显示预编辑事件失败：{e}"))
-            })?;
-
-        let events = Arc::clone(&self.events);
-        let hide_token = context
-            .on_hide_preedit_text(move |_, _| {
-                if let Ok(mut lock) = events.lock() {
-                    lock.push(IbusEngineEvent::EndComposition);
-                }
-                ibus::AfterCallback::Keep
-            })
-            .map_err(|e| {
-                VoiceInputError::Injection(format!("订阅 IBus 隐藏预编辑事件失败：{e}"))
-            })?;
-
-        self.tokens
-            .borrow_mut()
-            .extend([update_token, commit_token, show_token, hide_token]);
-        *self.context.borrow_mut() = Some(context);
-        Ok(())
     }
 }
 
 #[cfg(feature = "ibus")]
 impl IbusEngineBridge for IbusClientBridge {
     fn start_composition(&self) -> Result<()> {
-        self.ensure_context()?;
-
-        // 不调用 context.focus_in() —— VoiceInput 不是真正的 IBus 引擎，
-        // focus_in 会抢占目标应用的输入法焦点，导致光标消失。
+        // 不创建 IBus 上下文、不调用任何 IBus D-Bus 方法。
+        // VoiceInput 不是注册的 IBus 引擎，任何 D-Bus 交互都会
+        // 干扰目标应用的输入法状态和光标显示。
 
         if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
             let now = debug_timestamp();
-            eprintln!("[VOICEINPUT_DEBUG {now}] IBus start_composition (no focus_in)");
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus start_composition (no-op)");
         }
 
         if let Ok(mut lock) = self.events.lock() {
@@ -156,14 +83,9 @@ impl IbusEngineBridge for IbusClientBridge {
     }
 
     fn update_preedit(&self, text: &str) -> Result<()> {
-        self.ensure_context()?;
-
-        // 不调用 context.set_surrounding_text() —— VoiceInput 不是注册的
-        // IBus 引擎，此调用会向 IBus daemon 发送信号，干扰目标应用的输入法状态。
-
         if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
             let now = debug_timestamp();
-            eprintln!("[VOICEINPUT_DEBUG {now}] IBus update_preedit len={} (no D-Bus call)", text.len());
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus update_preedit len={} (no-op)", text.len());
         }
 
         if let Ok(mut lock) = self.events.lock() {
@@ -174,17 +96,14 @@ impl IbusEngineBridge for IbusClientBridge {
     }
 
     fn commit_text(&self, text: &str) -> Result<()> {
-        self.ensure_context()?;
         if let Ok(mut lock) = self.events.lock() {
             lock.push(IbusEngineEvent::CommitText(text.to_string()));
         }
 
-        // 不调用 context.reset() —— 同上，避免干扰目标应用的 IBus 状态。
-
         if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
             let now = debug_timestamp();
             let preview: String = text.chars().take(20).collect();
-            eprintln!("[VOICEINPUT_DEBUG {now}] IBus commit_text → insert_text \"{preview}\" (no D-Bus call)");
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus commit_text → insert_text \"{preview}\" (no-op)");
         }
 
         if let Err(err) = insert_text_into_active_window(text, None) {
@@ -197,29 +116,22 @@ impl IbusEngineBridge for IbusClientBridge {
     }
 
     fn cancel_composition(&self) -> Result<()> {
-        self.ensure_context()?;
-        if let Ok(mut lock) = self.events.lock() {
-            lock.push(IbusEngineEvent::CancelComposition);
-        }
-
-        // 不调用 context.reset() —— 同上。
-
         if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
             let now = debug_timestamp();
-            eprintln!("[VOICEINPUT_DEBUG {now}] IBus cancel_composition (no D-Bus call)");
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus cancel_composition (no-op)");
+        }
+
+        if let Ok(mut lock) = self.events.lock() {
+            lock.push(IbusEngineEvent::CancelComposition);
         }
 
         Ok(())
     }
 
     fn end_composition(&self) -> Result<()> {
-        self.ensure_context()?;
-
-        // 不调用 context.focus_out() —— 与 start_composition 对称，不操作 IBus 焦点。
-
         if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
             let now = debug_timestamp();
-            eprintln!("[VOICEINPUT_DEBUG {now}] IBus end_composition (no focus_out)");
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus end_composition (no-op)");
         }
 
         if let Ok(mut lock) = self.events.lock() {
