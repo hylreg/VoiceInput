@@ -289,10 +289,16 @@ impl LinuxHotkeyWatcher {
                                 if active.is_active() {
                                     if recorder.is_recording() {
                                         eprintln!("检测到双击 Ctrl 停止热键，正在结束录音...");
+                                        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+                                            eprintln!("[VOICEINPUT_DEBUG] hotkey thread: double-ctrl STOP, calling recorder.stop()");
+                                        }
                                         recorder.stop();
                                     }
                                 } else {
                                     eprintln!("检测到双击 Ctrl 开始热键，正在启动录音...");
+                                    if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+                                        eprintln!("[VOICEINPUT_DEBUG] hotkey thread: double-ctrl START trigger sent");
+                                    }
                                     let _ = sender.send(());
                                 }
                                 last_trigger_at = Some(now);

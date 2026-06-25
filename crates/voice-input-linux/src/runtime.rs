@@ -125,6 +125,11 @@ mod linux_runtime {
     const RECORDING_MARKER: &str = "●";
 
     fn type_recording_marker(active_window: Option<&str>) -> Result<()> {
+        if let Ok(dbg) = std::env::var("VOICEINPUT_DEBUG") {
+            if dbg == "1" {
+                eprintln!("[VOICEINPUT_DEBUG] type_recording_marker '●'");
+            }
+        }
         type_text_in_active_window(RECORDING_MARKER, active_window)
     }
 
@@ -164,6 +169,11 @@ mod linux_runtime {
         }
 
         let active_window = capture_active_window()?;
+        if let Ok(dbg) = std::env::var("VOICEINPUT_DEBUG") {
+            if dbg == "1" {
+                eprintln!("[VOICEINPUT_DEBUG] run_recording_cycle start win={active_window:?}");
+            }
+        }
         println!("正在录音...");
         let silence_stop_enabled = Arc::new(AtomicBool::new(true));
         let recording_indicator_inserted = Cell::new(false);
@@ -214,6 +224,11 @@ mod linux_runtime {
                 }
 
                 if recording_indicator_inserted.get() {
+                    if let Ok(dbg) = std::env::var("VOICEINPUT_DEBUG") {
+                        if dbg == "1" {
+                            eprintln!("[VOICEINPUT_DEBUG] before_commit: backspace marker");
+                        }
+                    }
                     backspace_in_active_window(
                         RECORDING_MARKER.chars().count(),
                         active_window.as_deref(),

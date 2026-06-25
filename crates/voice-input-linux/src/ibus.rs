@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "ibus")]
 use std::thread;
 #[cfg(feature = "ibus")]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::backend::LinuxBackendKind;
 use voice_input_core::{Result, VoiceInputError};
@@ -141,6 +141,12 @@ impl IbusEngineBridge for IbusClientBridge {
         self.ensure_context()?;
         let context_binding = self.context.borrow();
         let context = context_binding.as_ref().expect("IBus 上下文已初始化");
+
+        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+            let now = debug_timestamp();
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus focus_in");
+        }
+
         context
             .focus_in()
             .map_err(|e| VoiceInputError::Injection(format!("IBus focus_in 失败：{e}")))?;
@@ -156,6 +162,12 @@ impl IbusEngineBridge for IbusClientBridge {
         self.ensure_context()?;
         let context_binding = self.context.borrow();
         let context = context_binding.as_ref().expect("IBus 上下文已初始化");
+
+        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+            let now = debug_timestamp();
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus update_preedit len={}", text.len());
+        }
+
         context
             .set_surrounding_text(text.to_string(), text.len() as u32, text.len() as u32)
             .map_err(|e| {
@@ -177,9 +189,21 @@ impl IbusEngineBridge for IbusClientBridge {
 
         let context_binding = self.context.borrow();
         let context = context_binding.as_ref().expect("IBus 上下文已初始化");
+
+        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+            let now = debug_timestamp();
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus reset (commit_text)");
+        }
+
         context
             .reset()
             .map_err(|e| VoiceInputError::Injection(format!("提交后 IBus reset 失败：{e}")))?;
+
+        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+            let now = debug_timestamp();
+            let preview: String = text.chars().take(20).collect();
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus commit_text → insert_text \"{preview}\"");
+        }
 
         if let Err(err) = insert_text_into_active_window(text, None) {
             return Err(VoiceInputError::Injection(format!(
@@ -197,6 +221,12 @@ impl IbusEngineBridge for IbusClientBridge {
         }
         let context_binding = self.context.borrow();
         let context = context_binding.as_ref().expect("IBus 上下文已初始化");
+
+        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+            let now = debug_timestamp();
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus reset (cancel)");
+        }
+
         context
             .reset()
             .map_err(|e| VoiceInputError::Injection(format!("取消后 IBus reset 失败：{e}")))?;
@@ -208,6 +238,12 @@ impl IbusEngineBridge for IbusClientBridge {
         self.ensure_context()?;
         let context_binding = self.context.borrow();
         let context = context_binding.as_ref().expect("IBus 上下文已初始化");
+
+        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+            let now = debug_timestamp();
+            eprintln!("[VOICEINPUT_DEBUG {now}] IBus focus_out");
+        }
+
         context
             .focus_out()
             .map_err(|e| VoiceInputError::Injection(format!("IBus focus_out 失败：{e}")))?;
@@ -370,7 +406,49 @@ impl crate::backend::LinuxBackend for IbusBackend {
 }
 
 #[cfg(feature = "ibus")]
+macro_rules! debug_xdotool {
+    ($label:expr, $cmd:expr, $args:expr) => {{
+        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+            let now = crate::ibus::debug_timestamp();
+            eprintln!(
+                "[VOICEINPUT_DEBUG {now}] {} → args={:?}",
+                $label,
+                $args,
+            );
+        }
+        let result = $cmd;
+        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+            let now = crate::ibus::debug_timestamp();
+            match &result {
+                Ok(status) => eprintln!("[VOICEINPUT_DEBUG {now}] {} ← exit={}", $label, status.success()),
+                Err(e) => eprintln!("[VOICEINPUT_DEBUG {now}] {} ← err={}", $label, e),
+            }
+        }
+        result
+    }};
+}
+
+#[cfg(feature = "ibus")]
+pub fn debug_timestamp() -> String {
+    let elapsed = DEBUG_START.elapsed();
+    format!(
+        "{}.{:03}s",
+        elapsed.as_secs(),
+        elapsed.subsec_millis()
+    )
+}
+
+#[cfg(feature = "ibus")]
+static DEBUG_START: std::sync::LazyLock<Instant> =
+    std::sync::LazyLock::new(Instant::now);
+
+#[cfg(feature = "ibus")]
 pub fn capture_active_window() -> Result<Option<String>> {
+    if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+        let now = debug_timestamp();
+        eprintln!("[VOICEINPUT_DEBUG {now}] xdotool getwindowfocus");
+    }
+
     let output = Command::new("xdotool")
         .arg("getwindowfocus")
         .output()
@@ -384,12 +462,22 @@ pub fn capture_active_window() -> Result<Option<String>> {
     if window_id.is_empty() {
         Ok(None)
     } else {
+        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+            let now = debug_timestamp();
+            eprintln!("[VOICEINPUT_DEBUG {now}] capture_active_window ← win={window_id}");
+        }
         Ok(Some(window_id))
     }
 }
 
 #[cfg(feature = "ibus")]
 pub fn insert_text_into_active_window(text: &str, window_id: Option<&str>) -> Result<()> {
+    if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+        let now = debug_timestamp();
+        let preview: String = text.chars().take(20).collect();
+        eprintln!("[VOICEINPUT_DEBUG {now}] insert_text len={} is_ascii={} preview=\"{preview}\" win={window_id:?}", text.len(), text.chars().all(|c| c.is_ascii()));
+    }
+
     // xdotool type 无法正确处理中文等多字节字符，对纯 ASCII 文本才
     // 优先使用打字方式（避免覆盖剪贴板），对非 ASCII 文本直接走剪贴板粘贴。
     let is_ascii = text.chars().all(|c| c.is_ascii());
@@ -403,16 +491,25 @@ pub fn insert_text_into_active_window(text: &str, window_id: Option<&str>) -> Re
         .set_text(text.to_string())
         .map_err(|e| VoiceInputError::Injection(format!("写入系统剪贴板失败：{e}")))?;
 
+    if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+        let now = debug_timestamp();
+        eprintln!("[VOICEINPUT_DEBUG {now}] insert_text clipboard set, sleeping 40ms");
+    }
+
     thread::sleep(Duration::from_millis(40));
 
     for shortcut in [
         ["key", "--clearmodifiers", "Shift+Insert"],
         ["key", "--clearmodifiers", "ctrl+v"],
     ] {
-        let status = Command::new("xdotool")
-            .args(shortcut)
-            .status()
-            .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+        let status = debug_xdotool!(
+            "insert_text paste",
+            Command::new("xdotool")
+                .args(shortcut)
+                .status()
+                .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))),
+            shortcut
+        )?;
 
         if status.success() {
             return Ok(());
@@ -421,19 +518,32 @@ pub fn insert_text_into_active_window(text: &str, window_id: Option<&str>) -> Re
 
     // 粘贴失败时回退到先聚焦窗口再试
     if let Some(id) = window_id {
-        let _ = Command::new("xdotool")
-            .args(["windowfocus", "--sync", id])
-            .status();
+        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+            let now = debug_timestamp();
+            eprintln!("[VOICEINPUT_DEBUG {now}] insert_text paste failed, trying windowfocus {id}");
+        }
+        let _ = debug_xdotool!(
+            "insert_text windowfocus (retry)",
+            Command::new("xdotool")
+                .args(["windowfocus", "--sync", id])
+                .status()
+                .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))),
+            &["windowfocus", "--sync", id]
+        );
         thread::sleep(Duration::from_millis(40));
 
         for shortcut in [
             ["key", "--clearmodifiers", "Shift+Insert"],
             ["key", "--clearmodifiers", "ctrl+v"],
         ] {
-            let status = Command::new("xdotool")
-                .args(shortcut)
-                .status()
-                .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+            let status = debug_xdotool!(
+                "insert_text paste (retry)",
+                Command::new("xdotool")
+                    .args(shortcut)
+                    .status()
+                    .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))),
+                shortcut
+            )?;
 
             if status.success() {
                 return Ok(());
@@ -452,24 +562,42 @@ pub fn type_text_in_active_window(text: &str, window_id: Option<&str>) -> Result
     // 不要在此处调用 focus_window——xdotool windowfocus --sync 会抢占焦点，
     // 导致目标应用光标闪烁或消失。
 
-    let status = Command::new("xdotool")
-        .args(["type", "--clearmodifiers", "--delay", "0", text])
-        .status()
-        .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+    if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+        let now = debug_timestamp();
+        eprintln!("[VOICEINPUT_DEBUG {now}] xdotool type text_len={} win={window_id:?}", text.len());
+    }
+
+    let status = debug_xdotool!(
+        "xdotool type",
+        Command::new("xdotool")
+            .args(["type", "--clearmodifiers", "--delay", "0", text])
+            .status()
+            .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))),
+        &["type", "--clearmodifiers", "--delay", "0", text]
+    )?;
 
     if !status.success() {
         // 如果直接打字失败（例如 Wayland），回退到用 windowfocus 聚焦后再试
         if let Some(id) = window_id {
-            let _ = Command::new("xdotool")
-                .args(["windowfocus", "--sync", id])
-                .status();
+            let _ = debug_xdotool!(
+                "xdotool type windowfocus (retry)",
+                Command::new("xdotool")
+                    .args(["windowfocus", "--sync", id])
+                    .status()
+                    .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))),
+                &["windowfocus", "--sync", id]
+            );
             thread::sleep(Duration::from_millis(40));
         }
 
-        let status = Command::new("xdotool")
-            .args(["type", "--clearmodifiers", "--delay", "0", text])
-            .status()
-            .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+        let status = debug_xdotool!(
+            "xdotool type (retry)",
+            Command::new("xdotool")
+                .args(["type", "--clearmodifiers", "--delay", "0", text])
+                .status()
+                .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))),
+            &["type", "--clearmodifiers", "--delay", "0", text]
+        )?;
 
         if !status.success() {
             return Err(VoiceInputError::Injection(format!(
@@ -484,25 +612,43 @@ pub fn type_text_in_active_window(text: &str, window_id: Option<&str>) -> Result
 #[cfg(feature = "ibus")]
 pub fn backspace_in_active_window(count: usize, window_id: Option<&str>) -> Result<()> {
     // 不预先调用 focus_window——调用方已确保窗口是活动窗口。
-    for _ in 0..count {
-        let status = Command::new("xdotool")
-            .args(["key", "--clearmodifiers", "BackSpace"])
-            .status()
-            .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+    if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
+        let now = debug_timestamp();
+        eprintln!("[VOICEINPUT_DEBUG {now}] backspace count={count} win={window_id:?}");
+    }
+
+    for _i in 0..count {
+        let status = debug_xdotool!(
+            "backspace",
+            Command::new("xdotool")
+                .args(["key", "--clearmodifiers", "BackSpace"])
+                .status()
+                .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))),
+            &["key", "--clearmodifiers", "BackSpace"]
+        )?;
 
         if !status.success() {
             // 退格失败（如 Wayland），先聚焦再重试一次
             if let Some(id) = window_id {
-                let _ = Command::new("xdotool")
-                    .args(["windowfocus", "--sync", id])
-                    .status();
+                let _ = debug_xdotool!(
+                    "backspace windowfocus (retry)",
+                    Command::new("xdotool")
+                        .args(["windowfocus", "--sync", id])
+                        .status()
+                        .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))),
+                    &["windowfocus", "--sync", id]
+                );
                 thread::sleep(Duration::from_millis(40));
             }
 
-            let status = Command::new("xdotool")
-                .args(["key", "--clearmodifiers", "BackSpace"])
-                .status()
-                .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
+            let status = debug_xdotool!(
+                "backspace (retry)",
+                Command::new("xdotool")
+                    .args(["key", "--clearmodifiers", "BackSpace"])
+                    .status()
+                    .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))),
+                &["key", "--clearmodifiers", "BackSpace"]
+            )?;
 
             if !status.success() {
                 return Err(VoiceInputError::Injection(format!(
