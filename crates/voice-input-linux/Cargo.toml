@@ -20,5 +20,6 @@ ibus = { version = "0.2", optional = true }
 arboard = "3.6"
 cpal = "0.16"
 device_query = "4.0"
+fs2 = "0.4"
 hound = "3.5"
 ksni = { version = "0.3", features = ["blocking"] }

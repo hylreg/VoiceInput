@@ -287,8 +287,10 @@ impl LinuxHotkeyWatcher {
                         if triggered {
                             if !recently_triggered {
                                 if active.is_active() {
-                                    eprintln!("检测到双击 Ctrl 停止热键，正在结束录音...");
-                                    recorder.stop();
+                                    if recorder.is_recording() {
+                                        eprintln!("检测到双击 Ctrl 停止热键，正在结束录音...");
+                                        recorder.stop();
+                                    }
                                 } else {
                                     eprintln!("检测到双击 Ctrl 开始热键，正在启动录音...");
                                     let _ = sender.send(());
@@ -318,8 +320,10 @@ impl LinuxHotkeyWatcher {
                         }
 
                         if active.is_active() {
-                            eprintln!("检测到停止热键，正在结束录音...");
-                            recorder.stop();
+                            if recorder.is_recording() {
+                                eprintln!("检测到停止热键，正在结束录音...");
+                                recorder.stop();
+                            }
                         } else {
                             eprintln!("检测到开始热键，正在启动录音...");
                             let _ = sender.send(());

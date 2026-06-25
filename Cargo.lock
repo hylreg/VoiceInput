@@ -1659,6 +1659,7 @@ dependencies = [
  "arboard",
  "cpal",
  "device_query",
+ "fs2",
  "hound",
  "ibus",
  "ksni",

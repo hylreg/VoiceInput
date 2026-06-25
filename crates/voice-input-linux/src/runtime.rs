@@ -4,7 +4,8 @@
 mod linux_runtime {
     use std::cell::{Cell, RefCell};
     use std::env;
-    use std::process::Command;
+    use std::fs::{File, OpenOptions};
+    use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
@@ -12,14 +13,15 @@ mod linux_runtime {
     use crate::backend::LinuxBackendKind;
     use crate::host::{LinuxHostConfig, LinuxInputMethodHost};
     use crate::hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
-    use crate::ibus::backspace_in_active_window;
+    use crate::ibus::{backspace_in_active_window, capture_active_window, type_text_in_active_window};
     use crate::recorder::LinuxMicAudioRecorder;
     use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
+    use fs2::FileExt;
     use voice_input_asr::{
         FunAsrConfig, FunAsrRunner, FunAsrStreamingRunner, LocalFunAsrTranscriber,
         PythonFunAsrRunner, PythonFunAsrStreamingRunner, SocketFunAsrStreamingRunner,
     };
-    use voice_input_core::{AppConfig, Result};
+    use voice_input_core::{AppConfig, Result, VoiceInputError};
     use voice_input_runtime::{
         print_live_ready, run_streaming_live_cycle, stream_preview_chunk, LiveJobHandle,
         LiveJobState,
@@ -39,7 +41,7 @@ mod linux_runtime {
     impl Default for LinuxLiveAppConfig {
         fn default() -> Self {
             let mut app = AppConfig::default();
-            app.activation_hotkey = "Ctrl+Shift+Space".to_string();
+            app.activation_hotkey = "DoubleCtrl".to_string();
 
             Self {
                 app,
@@ -52,6 +54,49 @@ mod linux_runtime {
                 double_ctrl_window: Duration::from_millis(300),
                 silence_stop_timeout: Duration::from_millis(1500),
                 show_status_item: true,
+            }
+        }
+    }
+
+    struct SingleInstanceGuard {
+        _lock_file: File,
+    }
+
+    impl SingleInstanceGuard {
+        fn acquire() -> Result<Option<Self>> {
+            let lock_path = std::env::temp_dir().join("voiceinput-linux.lock");
+            let lock_file = OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .open(&lock_path)
+                .map_err(|e| {
+                    VoiceInputError::Injection(format!(
+                        "创建 Linux 单实例锁失败 {}：{e}",
+                        lock_path.display()
+                    ))
+                })?;
+
+            match lock_file.try_lock_exclusive() {
+                Ok(()) => {
+                    let mut lock_file_for_pid = lock_file;
+                    lock_file_for_pid.set_len(0).map_err(|e| {
+                        VoiceInputError::Injection(format!("清空 Linux 单实例锁失败：{e}"))
+                    })?;
+                    lock_file_for_pid
+                        .write_all(format!("pid={}\n", std::process::id()).as_bytes())
+                        .map_err(|e| {
+                            VoiceInputError::Injection(format!("写入 Linux 单实例锁失败：{e}"))
+                        })?;
+                    Ok(Some(Self {
+                        _lock_file: lock_file_for_pid,
+                    }))
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+                Err(err) => Err(VoiceInputError::Injection(format!(
+                    "获取 Linux 单实例锁失败 {}：{err}",
+                    lock_path.display()
+                ))),
             }
         }
     }
@@ -79,21 +124,8 @@ mod linux_runtime {
 
     const RECORDING_MARKER: &str = "●";
 
-    fn type_recording_marker() -> Result<()> {
-        let status = Command::new("xdotool")
-            .args(["type", "--clearmodifiers", "--delay", "0", RECORDING_MARKER])
-            .status()
-            .map_err(|e| {
-                voice_input_core::VoiceInputError::Injection(format!("调用 xdotool 失败：{e}"))
-            })?;
-
-        if !status.success() {
-            return Err(voice_input_core::VoiceInputError::Injection(format!(
-                "xdotool 输入失败，退出码：{status}"
-            )));
-        }
-
-        Ok(())
+    fn type_recording_marker(active_window: Option<&str>) -> Result<()> {
+        type_text_in_active_window(RECORDING_MARKER, active_window)
     }
 
     fn build_linux_asr(
@@ -131,6 +163,7 @@ mod linux_runtime {
             tray.set_recording(true);
         }
 
+        let active_window = capture_active_window()?;
         println!("正在录音...");
         let silence_stop_enabled = Arc::new(AtomicBool::new(true));
         let recording_indicator_inserted = Cell::new(false);
@@ -141,7 +174,7 @@ mod linux_runtime {
             preview_runner,
             recording_indicator_text,
             |session, preview_runner| {
-                if let Err(err) = type_recording_marker() {
+                if let Err(err) = type_recording_marker(active_window.as_deref()) {
                     eprintln!("Linux 常驻输入失败：录音状态图标插入失败：{err}");
                 } else {
                     recording_indicator_inserted.set(true);
@@ -181,7 +214,10 @@ mod linux_runtime {
                 }
 
                 if recording_indicator_inserted.get() {
-                    backspace_in_active_window(RECORDING_MARKER.chars().count())?;
+                    backspace_in_active_window(
+                        RECORDING_MARKER.chars().count(),
+                        active_window.as_deref(),
+                    )?;
                 }
                 Ok(())
             },
@@ -210,6 +246,12 @@ mod linux_runtime {
     }
 
     pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
+        let Some(_instance_guard) = SingleInstanceGuard::acquire()? else {
+            return Err(VoiceInputError::Injection(
+                "检测到已有 Linux 常驻实例正在运行，请先退出旧实例后再启动".to_string(),
+            ));
+        };
+
         let recorder = LinuxMicAudioRecorder::new(config.max_recording_duration);
         let recorder_for_watcher = recorder.clone();
         let active = Arc::new(LiveJobState::default());
