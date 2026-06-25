@@ -2,7 +2,7 @@
 
 #[cfg(target_os = "linux")]
 mod linux_runtime {
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::env;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
@@ -13,7 +13,6 @@ mod linux_runtime {
     use crate::backend::LinuxBackendKind;
     use crate::host::{LinuxHostConfig, LinuxInputMethodHost};
     use crate::hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
-    use crate::ibus::{backspace_in_active_window, capture_active_window, type_text_in_active_window};
     use crate::recorder::LinuxMicAudioRecorder;
     use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
     use fs2::FileExt;
@@ -122,17 +121,6 @@ mod linux_runtime {
         }
     }
 
-    const RECORDING_MARKER: &str = "●";
-
-    fn type_recording_marker(active_window: Option<&str>) -> Result<()> {
-        if let Ok(dbg) = std::env::var("VOICEINPUT_DEBUG") {
-            if dbg == "1" {
-                eprintln!("[VOICEINPUT_DEBUG] type_recording_marker '●'");
-            }
-        }
-        type_text_in_active_window(RECORDING_MARKER, active_window)
-    }
-
     fn build_linux_asr(
         config: &FunAsrConfig,
     ) -> Result<(
@@ -168,15 +156,8 @@ mod linux_runtime {
             tray.set_recording(true);
         }
 
-        let active_window = capture_active_window()?;
-        if let Ok(dbg) = std::env::var("VOICEINPUT_DEBUG") {
-            if dbg == "1" {
-                eprintln!("[VOICEINPUT_DEBUG] run_recording_cycle start win={active_window:?}");
-            }
-        }
         println!("正在录音...");
         let silence_stop_enabled = Arc::new(AtomicBool::new(true));
-        let recording_indicator_inserted = Cell::new(false);
         let preview_error = RefCell::new(None::<String>);
         let result = run_streaming_live_cycle(
             host,
@@ -184,12 +165,6 @@ mod linux_runtime {
             preview_runner,
             recording_indicator_text,
             |session, preview_runner| {
-                if let Err(err) = type_recording_marker(active_window.as_deref()) {
-                    eprintln!("Linux 常驻输入失败：录音状态图标插入失败：{err}");
-                } else {
-                    recording_indicator_inserted.set(true);
-                }
-
                 let audio = recorder.record_once_with_chunks(
                     Duration::from_millis(100),
                     silence_stop_timeout,
@@ -223,17 +198,6 @@ mod linux_runtime {
                     }
                 }
 
-                if recording_indicator_inserted.get() {
-                    if let Ok(dbg) = std::env::var("VOICEINPUT_DEBUG") {
-                        if dbg == "1" {
-                            eprintln!("[VOICEINPUT_DEBUG] before_commit: backspace marker");
-                        }
-                    }
-                    backspace_in_active_window(
-                        RECORDING_MARKER.chars().count(),
-                        active_window.as_deref(),
-                    )?;
-                }
                 Ok(())
             },
         );

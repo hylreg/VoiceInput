@@ -329,6 +329,7 @@ static DEBUG_START: std::sync::LazyLock<Instant> =
     std::sync::LazyLock::new(Instant::now);
 
 #[cfg(feature = "ibus")]
+#[allow(dead_code)]
 pub fn capture_active_window() -> Result<Option<String>> {
     if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
         let now = debug_timestamp();
@@ -496,6 +497,7 @@ pub fn type_text_in_active_window(text: &str, window_id: Option<&str>) -> Result
 }
 
 #[cfg(feature = "ibus")]
+#[allow(dead_code)]
 pub fn backspace_in_active_window(count: usize, window_id: Option<&str>) -> Result<()> {
     // 不预先调用 focus_window——调用方已确保窗口是活动窗口。
     if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
