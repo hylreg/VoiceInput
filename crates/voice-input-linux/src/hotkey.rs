@@ -46,6 +46,14 @@ impl LinuxHotkeySpec {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
         {
+            if token.eq_ignore_ascii_case("longctrl")
+                || token.eq_ignore_ascii_case("long-ctrl")
+                || token.eq_ignore_ascii_case("long_ctrl")
+            {
+                parsed.double_ctrl = true;
+                continue;
+            }
+
             if token.eq_ignore_ascii_case("doublectrl")
                 || token.eq_ignore_ascii_case("double-ctrl")
                 || token.eq_ignore_ascii_case("double_ctrl")
@@ -265,54 +273,55 @@ impl LinuxHotkeyWatcher {
 
         let handle = thread::spawn(move || {
             let device = DeviceState::new();
-            let mut latched = false;
-            let mut last_ctrl_press: Option<Instant> = None;
             let mut last_trigger_at: Option<Instant> = None;
+            let mut last_ctrl_release: Option<Instant> = None;
+            let mut ctrl_was_held = false;
+            let mut latched = false;
             const TRIGGER_COOLDOWN: Duration = Duration::from_millis(800);
 
             while !stop_for_thread.load(Ordering::SeqCst) {
                 let keys = device.get_keys();
+
                 if spec.double_ctrl {
-                    let ctrl_pressed = spec.matches(&keys);
+                    // 使用 has_any 而不是 is_ctrl_only 来检测 Ctrl 状态。
+                    // is_ctrl_only 会在 Ctrl+C 后释放 C 时产生虚假的上升沿
+                    //（因为 Ctrl 再次变成"单独按下"），导致组合键误触发。
+                    let ctrl_held = has_any(&keys, &[Keycode::LControl, Keycode::RControl]);
+                    let now = Instant::now();
+                    let in_cooldown = last_trigger_at
+                        .map(|last| now.duration_since(last) <= TRIGGER_COOLDOWN)
+                        .unwrap_or(false);
 
-                    if ctrl_pressed && !latched {
-                        let now = Instant::now();
-                        let recently_triggered = last_trigger_at
-                            .map(|last| now.duration_since(last) <= TRIGGER_COOLDOWN)
-                            .unwrap_or(false);
-                        let triggered = last_ctrl_press
-                            .map(|last| now.duration_since(last) <= double_ctrl_window)
-                            .unwrap_or(false);
-
-                        if triggered {
-                            if !recently_triggered {
-                                if active.is_active() {
-                                    if recorder.is_recording() {
-                                        eprintln!("检测到双击 Ctrl 停止热键，正在结束录音...");
-                                        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
-                                            eprintln!("[VOICEINPUT_DEBUG] hotkey thread: double-ctrl STOP, calling recorder.stop()");
+                    if ctrl_held && !ctrl_was_held {
+                        // Ctrl 刚按下
+                        if !in_cooldown {
+                            if let Some(release_time) = last_ctrl_release {
+                                if now.duration_since(release_time) <= double_ctrl_window {
+                                    // 两次 Ctrl 按下间隔在窗口内 → 触发
+                                    if active.is_active() {
+                                        if recorder.is_recording() {
+                                            eprintln!("检测到双击 Ctrl 停止热键，正在结束录音...");
+                                            recorder.stop();
                                         }
-                                        recorder.stop();
+                                    } else {
+                                        eprintln!("检测到双击 Ctrl 开始热键，正在启动录音...");
+                                        let _ = sender.send(());
                                     }
-                                } else {
-                                    eprintln!("检测到双击 Ctrl 开始热键，正在启动录音...");
-                                    if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
-                                        eprintln!("[VOICEINPUT_DEBUG] hotkey thread: double-ctrl START trigger sent");
-                                    }
-                                    let _ = sender.send(());
+                                    last_trigger_at = Some(now);
+                                    last_ctrl_release = None;
                                 }
-                                last_trigger_at = Some(now);
                             }
-                            last_ctrl_press = None;
                         } else {
-                            last_ctrl_press = Some(now);
+                            // 冷却中，忽略
                         }
-
-                        latched = true;
-                    } else if !ctrl_pressed {
-                        latched = false;
+                    } else if !ctrl_held && ctrl_was_held {
+                        // Ctrl 刚释放
+                        last_ctrl_release = Some(now);
                     }
+
+                    ctrl_was_held = ctrl_held;
                 } else {
+                    // 组合热键（Ctrl+Shift+Space 等）
                     let pressed = spec.matches(&keys);
 
                     if pressed && !latched {
