@@ -858,6 +858,7 @@ voiceinput_linux_install_impl() {
   local audio_file=""
   local run_smoke_after_bootstrap=false
   local run_live_app_after_bootstrap=true
+  local setup_autostart=true
   local -a deploy_args=()
 
   while [[ $# -gt 0 ]]; do
@@ -892,6 +893,10 @@ voiceinput_linux_install_impl() {
         deploy_args+=("${VOICEINPUT_EXPANDED_MODEL_ARGS[@]}")
         shift 2
         ;;
+      --no-autostart)
+        setup_autostart=false
+        shift
+        ;;
       --no-launch)
         run_live_app_after_bootstrap=false
         shift
@@ -905,6 +910,7 @@ voiceinput_linux_install_impl() {
   - 默认先执行 Linux bootstrap，准备 Python 环境并下载模型
   - 会自动安装 Ubuntu 20.04 常用的 Linux 编译依赖，如 pkg-config、libdbus-1-dev、libibus-1.0-dev
   - 然后自动启动 Linux 常驻托盘版
+  - 默认会设置 systemd 开机自启，可使用 --no-autostart 跳过
   - 如果传入 --audio-file，会在准备完成后自动跑一次 Linux smoke
   - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
   - --backend 只影响 Linux 常驻版 / smoke 的宿主后端
@@ -946,7 +952,102 @@ EOF
   fi
 
   if [[ "$run_live_app_after_bootstrap" == true ]]; then
+    if [[ "$setup_autostart" == true ]]; then
+      voiceinput_setup_linux_autostart "$backend"
+    fi
     voiceinput_run_platform_live linux "$backend"
+  fi
+}
+
+voiceinput_setup_linux_autostart() {
+  local backend="${1:-ibus}"
+
+  echo "正在设置 Linux 开机自启..."
+
+  voiceinput_ensure_cargo
+  cd "$REPO_ROOT"
+
+  echo "正在编译 release 二进制..."
+  cargo build -p voice-input-cli --features linux-ibus-smoke --release
+
+  local bin_dir="$HOME/.local/bin"
+  local launcher_path="$bin_dir/voice-input"
+  mkdir -p "$bin_dir"
+
+  cat > "$launcher_path" <<'LAUNCHER'
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$$REPO_ROOT_PLACEHOLDER$$"
+cd "$REPO_ROOT"
+
+if [[ -f "$REPO_ROOT/config/voiceinput.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/config/voiceinput.env"
+  set +a
+fi
+
+exec "$REPO_ROOT/target/release/voice-input-cli" live linux --backend "$$BACKEND_PLACEHOLDER$$"
+LAUNCHER
+
+  sed -i "s|\$\$REPO_ROOT_PLACEHOLDER\$\$|$REPO_ROOT|g" "$launcher_path"
+  sed -i "s|\$\$BACKEND_PLACEHOLDER\$\$|$backend|g" "$launcher_path"
+  chmod +x "$launcher_path"
+
+  echo "已创建启动脚本：$launcher_path"
+
+  local service_dir="$HOME/.config/systemd/user"
+  mkdir -p "$service_dir"
+
+  cat > "$service_dir/voice-input.service" <<SERVICE
+[Unit]
+Description=VoiceInput 语音输入常驻服务
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=$launcher_path
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
+SERVICE
+
+  systemctl --user daemon-reload
+  systemctl --user enable voice-input.service
+
+  echo "已启用 systemd 用户服务：voice-input.service"
+  echo ""
+  echo "管理命令："
+  echo "  启动服务：systemctl --user start voice-input.service"
+  echo "  停止服务：systemctl --user stop voice-input.service"
+  echo "  查看状态：systemctl --user status voice-input.service"
+  echo "  查看日志：journalctl --user -u voice-input.service -f"
+  echo "  禁用自启：systemctl --user disable voice-input.service"
+}
+
+voiceinput_remove_linux_autostart() {
+  echo "正在移除 Linux 开机自启..."
+
+  local service_dir="$HOME/.config/systemd/user"
+
+  if [[ -f "$service_dir/voice-input.service" ]]; then
+    systemctl --user stop voice-input.service 2>/dev/null || true
+    systemctl --user disable voice-input.service 2>/dev/null || true
+    rm -f "$service_dir/voice-input.service"
+    systemctl --user daemon-reload
+    echo "已移除 systemd 用户服务"
+  else
+    echo "未找到已安装的 systemd 服务"
+  fi
+
+  local launcher_path="$HOME/.local/bin/voice-input"
+  if [[ -f "$launcher_path" ]]; then
+    rm -f "$launcher_path"
+    echo "已移除启动脚本：$launcher_path"
   fi
 }
 
@@ -1332,6 +1433,7 @@ usage() {
   macos smoke            运行 macOS smoke
   macos dev-install      开发时准备依赖、下载模型并启动 app
   linux install          安装并启动 Linux 常驻版
+  linux uninstall        移除 Linux 常驻版及开机自启
   linux smoke            运行 Linux smoke
   linux dev              启动 Linux 开发常驻服务
   linux dev-streaming    启动 Linux FunASR 流式开发服务
@@ -1383,6 +1485,9 @@ fi
     ;;
   linux-install)
     voiceinput_linux_install_impl "$@"
+    ;;
+  linux-uninstall)
+    voiceinput_remove_linux_autostart
     ;;
   windows-install)
     voiceinput_windows_install_impl "$@"
