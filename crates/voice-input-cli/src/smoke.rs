@@ -36,10 +36,12 @@ pub fn run_with_args(args: Vec<String>) -> i32 {
         }
         Command::LiveLinux {
             backend,
+            activation_hotkey,
             double_ctrl_window_ms,
             silence_stop_ms,
         } => voice_input_linux::run_live_with_args(voice_input_linux::LinuxLiveArgs {
             backend,
+            activation_hotkey,
             double_ctrl_window_ms,
             silence_stop_ms,
         }),
@@ -72,6 +74,7 @@ enum Command {
     LiveMacos,
     LiveLinux {
         backend: voice_input_linux::LinuxBackendKind,
+        activation_hotkey: Option<String>,
         double_ctrl_window_ms: Option<u64>,
         silence_stop_ms: Option<u64>,
     },
@@ -128,6 +131,7 @@ impl Command {
                     let args = parse_linux_live_args(iter.collect())?;
                     Ok(Self::LiveLinux {
                         backend: args.backend,
+                        activation_hotkey: args.activation_hotkey,
                         double_ctrl_window_ms: args.double_ctrl_window_ms,
                         silence_stop_ms: args.silence_stop_ms,
                     })
@@ -198,5 +202,5 @@ fn map_arg_parse_error(message: String) -> ParseOutcome {
 }
 
 fn usage() -> String {
-    "用法：cargo run -p voice-input-cli -- <smoke|live> <macos|linux|windows> [args]\nsmoke: cargo run -p voice-input-cli -- smoke macos --audio-file testdata/smoke.wav\nlive: cargo run -p voice-input-cli -- live windows\nLinux smoke IBus: cargo run -p voice-input-cli --features linux-ibus-smoke -- smoke linux --audio-file testdata/smoke.wav --backend ibus\nLinux live IBus: cargo run -p voice-input-cli --features linux-ibus-smoke -- live linux --backend ibus [--double-ctrl-window-ms 300] [--silence-stop-ms 1500]".to_string()
+    "用法：cargo run -p voice-input-cli -- <smoke|live> <macos|linux|windows> [args]\nsmoke: cargo run -p voice-input-cli -- smoke macos --audio-file testdata/smoke.wav\nlive: cargo run -p voice-input-cli -- live windows\nLinux smoke IBus: cargo run -p voice-input-cli --features linux-ibus-smoke -- smoke linux --audio-file testdata/smoke.wav --backend ibus\nLinux live IBus: cargo run -p voice-input-cli --features linux-ibus-smoke -- live linux --backend ibus [--activation-hotkey DoubleCtrl] [--double-ctrl-window-ms 300] [--silence-stop-ms 1500]".to_string()
 }

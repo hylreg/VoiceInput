@@ -5,9 +5,10 @@ use crate::{
     LinuxLiveAppConfig,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct LinuxLiveArgs {
     pub backend: LinuxBackendKind,
+    pub activation_hotkey: Option<String>,
     pub double_ctrl_window_ms: Option<u64>,
     pub silence_stop_ms: Option<u64>,
 }
@@ -16,6 +17,7 @@ impl Default for LinuxLiveArgs {
     fn default() -> Self {
         Self {
             backend: LinuxBackendKind::IBus,
+            activation_hotkey: None,
             double_ctrl_window_ms: None,
             silence_stop_ms: None,
         }
@@ -65,7 +67,7 @@ pub fn run_live_with_args(args: LinuxLiveArgs) -> Result<(), String> {
         );
     }
 
-    let config = LinuxLiveAppConfig {
+    let mut config = LinuxLiveAppConfig {
         host: LinuxHostConfig {
             backend: args.backend,
             service_name: "voice-input".to_string(),
@@ -75,6 +77,10 @@ pub fn run_live_with_args(args: LinuxLiveArgs) -> Result<(), String> {
         silence_stop_timeout: Duration::from_millis(effective_silence_stop_ms),
         ..Default::default()
     };
+
+    if let Some(hotkey) = args.activation_hotkey.as_deref() {
+        config.app.activation_hotkey = hotkey.to_string();
+    }
 
     run_live_app(config).map_err(|err| format!("Linux 常驻应用启动失败：{err}"))
 }
@@ -91,6 +97,12 @@ pub fn parse_live_args(args: Vec<String>) -> Result<LinuxLiveArgs, String> {
                     .next()
                     .ok_or_else(|| String::from("缺少 --backend 的值"))?;
                 parsed.backend = parse_backend(&value)?;
+            }
+            "--activation-hotkey" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| String::from("缺少 --activation-hotkey 的值"))?;
+                parsed.activation_hotkey = Some(value);
             }
             "--double-ctrl-window-ms" => {
                 let value = iter
@@ -122,7 +134,7 @@ pub fn parse_live_args(args: Vec<String>) -> Result<LinuxLiveArgs, String> {
 
 pub fn print_live_usage() {
     eprintln!(
-        "用法：cargo run -p voice-input-linux --bin voice-input-linux-app -- --backend ibus [--double-ctrl-window-ms 300] [--silence-stop-ms 1500]"
+        "用法：cargo run -p voice-input-linux --bin voice-input-linux-app -- --backend ibus [--activation-hotkey DoubleCtrl] [--double-ctrl-window-ms 300] [--silence-stop-ms 1500]"
     );
 }
 
