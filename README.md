@@ -116,13 +116,65 @@ scripts/voiceinput.sh model qwen-0.6b
 
 ## Linux 安装
 
-1. `scripts/voiceinput.sh linux install`
-2. 如果要安装时切模型，可以传入 `--model qwen` 或 `--model qwen-0.6b`
-3. 默认会设置 systemd 开机自启，可使用 `--no-autostart` 跳过
-4. `scripts/voiceinput.sh linux uninstall` 可移除常驻版及开机自启
+### 一键安装（含开机自启）
 
-日常调试链路：
+```bash
+scripts/voiceinput.sh linux install
+```
 
-1. 改代码
-2. 运行 `scripts/voiceinput.sh linux install`
-3. 直接在前台应用里验证输入效果
+这一条命令会依次完成：安装系统依赖 → 准备 Python 环境 → 下载模型 → 编译 release 二进制 → 设置 systemd 用户服务 → 启动常驻托盘。安装完成后语音输入法已在运行，**重启后也会自动启动**。
+
+常用选项：
+
+```bash
+# 指定模型（默认 qwen-0.6b）
+scripts/voiceinput.sh linux install --model qwen
+
+# 不设置开机自启
+scripts/voiceinput.sh linux install --no-autostart
+
+# 安装但不启动（只编译 + 注册服务，不下发 start）
+scripts/voiceinput.sh linux install --no-launch
+
+# 安装后立即跑 smoke 验证
+scripts/voiceinput.sh linux install --audio-file testdata/smoke.wav
+```
+
+### 服务管理
+
+安装完成后通过 systemd 用户服务管理：
+
+```bash
+# 启动
+systemctl --user start voice-input.service
+# 停止
+systemctl --user stop voice-input.service
+# 查看运行状态
+systemctl --user status voice-input.service
+# 查看实时日志
+journalctl --user -u voice-input.service -f
+# 禁用开机自启（保留编译产物）
+systemctl --user disable voice-input.service
+```
+
+### 手动启动（调试用）
+
+改代码后无需完整重装，可直接编译并启动：
+
+```bash
+cargo run -p voice-input-linux --features ibus -- live --backend ibus
+```
+
+也可直接用安装时生成的启动脚本（会自动加载模型配置）：
+
+```bash
+~/.local/bin/voice-input
+```
+
+### 卸载
+
+```bash
+scripts/voiceinput.sh linux uninstall
+```
+
+移除 systemd 服务、启动脚本，并停用开机自启。
