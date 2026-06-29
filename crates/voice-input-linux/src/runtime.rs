@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -129,17 +129,15 @@ fn run_recording_cycle(
 
     println!("正在录音...");
     let silence_stop_enabled = Arc::new(AtomicBool::new(true));
-    let saw_voice = Arc::new(AtomicBool::new(false));
-    let saw_voice_for_callback = Arc::clone(&saw_voice);
+    let voice_chunks = Arc::new(AtomicUsize::new(0));
+    let voice_chunks_for_callback = Arc::clone(&voice_chunks);
     let audio = recorder.record_once_with_chunks(
         Duration::from_millis(100),
         silence_stop_timeout,
         Arc::clone(&silence_stop_enabled),
         move |_, samples, _| {
-            if !saw_voice_for_callback.load(Ordering::SeqCst)
-                && has_voice_activity(&samples)
-            {
-                saw_voice_for_callback.store(true, Ordering::SeqCst);
+            if has_voice_activity(&samples) {
+                voice_chunks_for_callback.fetch_add(1, Ordering::SeqCst);
             }
         },
     );
@@ -157,9 +155,10 @@ fn run_recording_cycle(
         }
     }
 
-    // 整段录音未检测到语音活动，跳过 ASR 转写，避免模型对噪声幻觉。
-    if !saw_voice.load(Ordering::SeqCst) {
-        eprintln!("未检测到语音活动，跳过转写");
+    // 语音活动需要至少持续 200ms（2 个 chunk）才送 ASR，
+    // 防止单块噪声峰值误触发导致幻觉输出。
+    if voice_chunks.load(Ordering::SeqCst) < 2 {
+        eprintln!("未检测到有效语音活动（{} 块），跳过转写", voice_chunks.load(Ordering::SeqCst));
         let _ = host.cancel_composition();
         let _ = host.end_composition();
         return Ok(false);
