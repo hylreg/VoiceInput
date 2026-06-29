@@ -358,43 +358,49 @@ pub fn capture_active_window() -> Result<Option<String>> {
 }
 
 /// 在光标处插入录音指示符 ●，同时保存当前剪贴板。
-/// 返回的 guard 在 drop 时自动还原剪贴板内容。
+/// 返回的 guard 持有 Clipboard 对象，确保还原后剪贴板内容
+/// 存活到整个录音周期结束，不被剪贴板管理器丢弃。
 #[cfg(feature = "ibus")]
 pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
     let saved = arboard::Clipboard::new()
         .ok()
-        .and_then(|mut c| c.get_text().ok())
-        .map(|s| s.to_string());
+        .and_then(|mut c| c.get_text().ok());
 
     insert_text_into_active_window("●", None)?;
 
-    Ok(ClipboardRestoreGuard { saved })
+    // 立即还原用户剪贴板，避免 ● 残留在剪贴板中
+    let clipboard = if let Some(ref text) = saved {
+        let mut c = arboard::Clipboard::new()
+            .map_err(|e| VoiceInputError::Injection(format!("打开系统剪贴板失败：{e}")))?;
+        c.set_text(text.clone())
+            .map_err(|e| VoiceInputError::Injection(format!("写入系统剪贴板失败：{e}")))?;
+        Some(c)
+    } else {
+        None
+    };
+
+    Ok(ClipboardRestoreGuard {
+        _clipboard: clipboard,
+        saved,
+    })
 }
 
-/// 持有剪贴板还原逻辑的守卫，drop 时自动恢复用户剪贴板。
+/// 持有剪贴板还原逻辑的守卫。
+/// `_clipboard` 字段在整个录音周期内保持 Clipboard 连接存活，
+/// 确保剪贴板管理器在足够长的时间内能同步内容。
 pub struct ClipboardRestoreGuard {
+    #[allow(dead_code)]
+    _clipboard: Option<arboard::Clipboard>,
     #[allow(dead_code)]
     saved: Option<String>,
 }
 
-#[cfg(feature = "ibus")]
 impl Drop for ClipboardRestoreGuard {
     fn drop(&mut self) {
-        if let Some(text) = self.saved.take() {
-            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                let _ = clipboard.set_text(text);
-                // Linux 剪贴板管理器需要时间同步内容，不能立即 drop Clipboard。
-                // arboard 的 Drop 不做持久化，这里短暂持有足够让管理器抓取。
-                thread::sleep(Duration::from_millis(80));
-            }
-            // clipboard 在此处 drop
-        }
+        // _clipboard 在此处 drop，录音周期结束。
+        // 由于 Clipboard 已经持有了足够长时间（通常数秒），
+        // 剪贴板管理器有充足时间同步还原后的内容。
     }
-}
-
-#[cfg(not(feature = "ibus"))]
-impl Drop for ClipboardRestoreGuard {
-    fn drop(&mut self) {}
 }
 
 #[cfg(feature = "ibus")]
@@ -597,7 +603,10 @@ pub fn capture_active_window() -> Result<Option<String>> {
 
 #[cfg(not(feature = "ibus"))]
 pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
-    Ok(ClipboardRestoreGuard { saved: None })
+    Ok(ClipboardRestoreGuard {
+        _clipboard: None,
+        saved: None,
+    })
 }
 
 #[cfg(not(feature = "ibus"))]
