@@ -65,6 +65,49 @@ scripts/voiceinput.sh model <funasr|qwen|qwen-0.6b>
 7. 如果要切模型，可以传入 `--model qwen` 或 `--model qwen-0.6b`
 8. 如果同时想跑 smoke，可以传入 `--audio-file testdata/smoke.wav`
 
+## 模型
+
+项目支持三种 ASR 模型，通过 `scripts/voiceinput.sh model <模型名>` 切换，或传 `--model <模型名>` 给 bootstrap/install/smoke 子命令。
+
+### FunASR (`funasr`)
+
+- **模型**：[FunAudioLLM/Fun-ASR-Nano-2512](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512)
+- **后端**：FunASR
+- **参数量**：~100MB，Nano 级别
+- **特点**：最轻量，启动快，内存占用低，适合低配机器或对延迟敏感的场景。中文识别精度中上，适合日常语音输入。
+- **适用场景**：资源受限的设备、快速测试、不需要最高精度的日常使用。
+
+### Qwen3-ASR 1.7B (`qwen`)
+
+- **模型**：[Qwen/Qwen3-ASR-1.7B](https://www.modelscope.cn/collections/Qwen/Qwen3-ASR)
+- **后端**：Qwen
+- **参数量**：1.7B
+- **特点**：精度最高的模型，中文识别效果最好，支持多种语言。需要更多显存/内存，加载时间较长。
+- **适用场景**：对识别精度要求高的场景，有 GPU 或充足内存的机器。
+
+### Qwen3-ASR 0.6B (`qwen-0.6b`，默认)
+
+- **模型**：[Qwen/Qwen3-ASR-0.6B](https://www.modelscope.cn/collections/Qwen/Qwen3-ASR)
+- **后端**：Qwen
+- **参数量**：0.6B
+- **特点**：Qwen3-ASR 的小型化版本，精度接近 1.7B 但资源占用显著更低，启动更快。当前默认模型。
+- **适用场景**：多数用户的推荐选择，在精度和资源消耗之间取得良好平衡。
+
+### 切换模型
+
+```bash
+# 切换到 Qwen3-ASR 1.7B（最高精度）
+scripts/voiceinput.sh model qwen
+
+# 切换到 FunASR（最轻量）
+scripts/voiceinput.sh model funasr
+
+# 切换到 Qwen3-ASR 0.6B（默认，平衡之选）
+scripts/voiceinput.sh model qwen-0.6b
+```
+
+切换后运行 `scripts/voiceinput.sh bootstrap` 下载对应模型，再 `scripts/voiceinput.sh linux install` 更新常驻服务。
+
 ## 模型部署
 
 1. `scripts/voiceinput.sh bootstrap`
