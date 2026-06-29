@@ -128,6 +128,10 @@ mod linux_runtime {
             tray.set_recording(true);
         }
 
+        // 开始输入法 composition，显示录音光标提示
+        host.start_composition()?;
+        let _ = host.update_preedit("● 录音中");
+
         println!("正在录音...");
         let silence_stop_enabled = Arc::new(AtomicBool::new(true));
         let audio = recorder.record_once_with_chunks(
@@ -140,6 +144,8 @@ mod linux_runtime {
         if let Some(tray) = tray {
             tray.set_recording(false);
             if tray.is_quit_requested() {
+                let _ = host.cancel_composition();
+                let _ = host.end_composition();
                 watcher.stop();
                 return Ok(true);
             }
@@ -154,12 +160,13 @@ mod linux_runtime {
 
                 if transcript.trim().is_empty() {
                     eprintln!("转写结果为空");
+                    let _ = host.cancel_composition();
+                    let _ = host.end_composition();
                     return Ok(false);
                 }
 
                 println!("识别结果：{transcript}");
 
-                host.start_composition()?;
                 if let Err(err) = host.commit_text(&transcript) {
                     let _ = host.cancel_composition();
                     let _ = host.end_composition();
@@ -171,6 +178,8 @@ mod linux_runtime {
                 if let Some(tray) = tray {
                     tray.set_recording(false);
                 }
+                let _ = host.cancel_composition();
+                let _ = host.end_composition();
                 eprintln!("Linux 常驻输入失败：{err}");
             }
         }
