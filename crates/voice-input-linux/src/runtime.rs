@@ -21,7 +21,7 @@ mod linux_runtime {
         PythonFunAsrRunner, PythonFunAsrStreamingRunner, SocketFunAsrStreamingRunner,
     };
     use voice_input_core::{AppConfig, Result, VoiceInputError};
-    use voice_input_runtime::{
+    use crate::live::{
         print_live_ready, run_streaming_live_cycle, stream_preview_chunk, LiveJobHandle,
         LiveJobState,
     };

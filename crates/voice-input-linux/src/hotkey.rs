@@ -13,7 +13,7 @@ use std::thread;
 use std::time::Instant;
 
 use voice_input_core::{Result, VoiceInputError};
-use voice_input_runtime::LiveJobState;
+use crate::live::LiveJobState;
 
 #[cfg(target_os = "linux")]
 use device_query::{DeviceQuery, DeviceState, Keycode};

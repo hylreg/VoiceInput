@@ -6,7 +6,7 @@ use voice_input_linux::{
     LinuxInputMethodHost, LinuxLiveAppConfig, LinuxLocalVoiceInput, LinuxLocalVoiceInputConfig,
     MockIbusBridge, MockLinuxBackend,
 };
-use voice_input_runtime::LocalVoiceInputConfig;
+use voice_input_linux::LocalVoiceInputConfig;
 
 #[test]
 fn session_tracks_composition_state() {

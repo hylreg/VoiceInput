@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use voice_input_core::{MockHotkeyManager, VoiceInputError};
-use voice_input_runtime::build_local_python_runtime_config;
+use crate::local::build_local_python_runtime_config;
 
 use crate::{
     FileAudioRecorder, LinuxBackend, LinuxBackendKind, LinuxHostConfig, LinuxLocalVoiceInput,
@@ -56,7 +56,7 @@ fn build_ibus_backend() -> Result<Box<dyn LinuxBackend>, VoiceInputError> {
 #[cfg(not(feature = "ibus"))]
 fn build_ibus_backend() -> Result<Box<dyn LinuxBackend>, VoiceInputError> {
     Err(VoiceInputError::Injection(
-        "当前构建未启用 IBus 支持，请使用 `cargo run -p voice-input-cli --features linux-ibus-smoke -- smoke linux --audio-file ... --backend ibus`"
+        "当前构建未启用 IBus 支持，请使用 `cargo run -p voice-input-linux --features ibus -- smoke --audio-file ... --backend ibus`"
             .to_string(),
     ))
 }
