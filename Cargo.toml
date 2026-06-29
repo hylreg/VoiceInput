@@ -1,12 +1,8 @@
 [workspace]
 members = [
     "crates/voice-input-core",
-    "crates/voice-input-cli",
+    "crates/voice-input-linux",
     "crates/voice-input-asr",
     "crates/voice-input-audio",
-    "crates/voice-input-runtime",
-    "crates/voice-input-macos",
-    "crates/voice-input-linux",
-    "crates/voice-input-windows",
 ]
 resolver = "2"
