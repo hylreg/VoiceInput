@@ -31,14 +31,6 @@ impl<D> StatefulInputMethodHost<D> {
             state: RefCell::new(CompositionState::default()),
         }
     }
-
-    pub fn state(&self) -> CompositionState {
-        self.state.borrow().clone()
-    }
-
-    pub fn driver(&self) -> &D {
-        &self.driver
-    }
 }
 
 impl<D> InputMethodHost for StatefulInputMethodHost<D>
