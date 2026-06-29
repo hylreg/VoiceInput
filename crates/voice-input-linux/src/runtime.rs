@@ -17,7 +17,7 @@ mod linux_runtime {
     use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber, PythonFunAsrRunner};
     use voice_input_core::{AppConfig, InputMethodHost, Result, VoiceInputError};
     use crate::live::{print_live_ready, LiveJobHandle, LiveJobState};
-    use crate::ibus::{backspace_in_active_window, insert_text_into_active_window};
+    use crate::ibus::{backspace_in_active_window, insert_indicator_and_save_clipboard};
 
     #[derive(Debug, Clone)]
     pub struct LinuxLiveAppConfig {
@@ -132,7 +132,7 @@ mod linux_runtime {
         // 在光标处显示录音提示符，标记输入法 composition 开始
         // IBus 协议 preedit 不可用（VoiceInput 不是注册引擎），走 xdotool 直接输入
         host.start_composition()?;
-        let _ = insert_text_into_active_window("●", None);
+        let _restore_clipboard = insert_indicator_and_save_clipboard()?;
 
         println!("正在录音...");
         let silence_stop_enabled = Arc::new(AtomicBool::new(true));

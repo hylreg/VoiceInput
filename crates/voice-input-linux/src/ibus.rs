@@ -357,6 +357,35 @@ pub fn capture_active_window() -> Result<Option<String>> {
     }
 }
 
+/// 在光标处插入录音指示符 ●，同时保存当前剪贴板。
+/// 返回的 guard 在 drop 时自动还原剪贴板内容。
+#[cfg(feature = "ibus")]
+pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
+    let saved = arboard::Clipboard::new()
+        .ok()
+        .and_then(|mut c| c.get_text().ok())
+        .map(|s| s.to_string());
+
+    insert_text_into_active_window("●", None)?;
+
+    Ok(ClipboardRestoreGuard { saved })
+}
+
+/// 持有剪贴板还原逻辑的守卫，drop 时自动恢复用户剪贴板。
+pub struct ClipboardRestoreGuard {
+    saved: Option<String>,
+}
+
+impl Drop for ClipboardRestoreGuard {
+    fn drop(&mut self) {
+        if let Some(text) = self.saved.take() {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                let _ = clipboard.set_text(text);
+            }
+        }
+    }
+}
+
 #[cfg(feature = "ibus")]
 pub fn insert_text_into_active_window(text: &str, window_id: Option<&str>) -> Result<()> {
     if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
@@ -553,6 +582,11 @@ pub fn backspace_in_active_window(count: usize, window_id: Option<&str>) -> Resu
 #[allow(dead_code)]
 pub fn capture_active_window() -> Result<Option<String>> {
     Ok(None)
+}
+
+#[cfg(not(feature = "ibus"))]
+pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
+    Ok(ClipboardRestoreGuard { saved: None })
 }
 
 #[cfg(not(feature = "ibus"))]
