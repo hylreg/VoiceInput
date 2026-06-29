@@ -132,28 +132,6 @@ voiceinput_find_cargo_bin() {
   printf '%s\n' "$cargo_bin"
 }
 
-voiceinput_run_cli() {
-  local cargo_bin
-  cargo_bin="$(voiceinput_find_cargo_bin)"
-  if [[ -z "$cargo_bin" ]]; then
-    echo "未找到 cargo，可先执行 scripts/voiceinput.sh bootstrap" >&2
-    exit 1
-  fi
-
-  uv run -- "$cargo_bin" run -p voice-input-cli -- "$@"
-}
-
-voiceinput_run_cli_release() {
-  local cargo_bin
-  cargo_bin="$(voiceinput_find_cargo_bin)"
-  if [[ -z "$cargo_bin" ]]; then
-    echo "未找到 cargo，可先执行 scripts/voiceinput.sh bootstrap" >&2
-    exit 1
-  fi
-
-  uv run -- "$cargo_bin" run -p voice-input-cli --release -- "$@"
-}
-
 voiceinput_run_cli_linux() {
   local cargo_bin
   cargo_bin="$(voiceinput_find_cargo_bin)"
@@ -162,7 +140,7 @@ voiceinput_run_cli_linux() {
     exit 1
   fi
 
-  uv run -- "$cargo_bin" run -p voice-input-cli --features linux-ibus-smoke -- "$@"
+  uv run -- "$cargo_bin" run -p voice-input-linux --features ibus -- "$@"
 }
 
 voiceinput_run_bootstrap_args() {
@@ -178,24 +156,8 @@ voiceinput_run_platform_smoke() {
   local audio_file="$2"
   local backend="${3:-ibus}"
 
-  case "$platform" in
-    macos)
-      echo "正在运行 macOS smoke 验证"
-      voiceinput_macos_smoke_impl --audio-file "$audio_file"
-      ;;
-    linux)
-      echo "正在运行 Linux smoke"
-      voiceinput_linux_smoke_impl --audio-file "$audio_file" --backend "$backend"
-      ;;
-    windows)
-      echo "正在运行 Windows smoke 验证"
-      voiceinput_windows_smoke_impl --audio-file "$audio_file"
-      ;;
-    *)
-      echo "不支持的 smoke 平台：$platform" >&2
-      exit 2
-      ;;
-  esac
+  echo "正在运行 Linux smoke"
+  voiceinput_linux_smoke_impl --audio-file "$audio_file" --backend "$backend"
 }
 
 voiceinput_run_platform_live() {
@@ -205,25 +167,9 @@ voiceinput_run_platform_live() {
   voiceinput_ensure_cargo
   voiceinput_ensure_uv
 
-  case "$platform" in
-    macos)
-      echo "正在启动 macOS 常驻应用"
-      voiceinput_run_cli_release live macos
-      ;;
-    linux)
-      echo "正在启动 Linux 常驻托盘版"
-      voiceinput_refresh_cargo_path
-      voiceinput_run_cli_linux live linux --backend "$backend"
-      ;;
-    windows)
-      echo "正在启动 Windows 常驻应用"
-      voiceinput_run_cli_release live windows
-      ;;
-    *)
-      echo "不支持的 live 平台：$platform" >&2
-      exit 2
-      ;;
-  esac
+  echo "正在启动 Linux 常驻托盘版"
+  voiceinput_refresh_cargo_path
+  voiceinput_run_cli_linux live --backend "$backend"
 }
 
 voiceinput_ensure_linux_dev_deps() {
@@ -463,7 +409,7 @@ voiceinput_bootstrap_impl() {
 
 说明：
   - 未传 --audio-file 时，只执行 Python 环境和模型部署
-  - 传入 --audio-file 时，会在部署完成后自动运行 macOS smoke
+  - 传入 --audio-file 时，会在部署完成后自动运行 Linux smoke
   - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
   - 部署参数会原样传给 deploy_funasr_model.py
 
@@ -522,54 +468,13 @@ EOF
   fi
 
   if [[ -n "$smoke_audio_file" ]]; then
-    echo "正在运行 macOS smoke"
-    uv run -- cargo run -p voice-input-macos --bin voice-input-macos -- --audio-file "$smoke_audio_file"
+    echo "正在运行 Linux smoke"
+    uv run -- cargo run -p voice-input-linux --features ibus -- smoke --audio-file "$smoke_audio_file"
   fi
 
   echo "一键部署完成"
   echo "Rust：$(cargo --version)"
   echo "uv：$(uv --version)"
-}
-
-voiceinput_macos_smoke_impl() {
-  local audio_file=""
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --audio-file)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 --audio-file 的值" >&2
-          exit 2
-        fi
-        audio_file="$2"
-        shift 2
-        ;;
-      --help|-h)
-        cat >&2 <<'EOF'
-用法：
-  scripts/voiceinput.sh macos smoke --audio-file /path/to/audio.wav
-
-说明：
-  - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
-EOF
-        exit 0
-        ;;
-      *)
-        echo "不支持的参数：$1" >&2
-        exit 2
-        ;;
-    esac
-  done
-
-  if [[ -z "$audio_file" ]]; then
-    echo "用法：scripts/voiceinput.sh macos smoke --audio-file /path/to/audio.wav" >&2
-    exit 2
-  fi
-
-  voiceinput_ensure_cargo
-  voiceinput_ensure_uv
-  cd "$REPO_ROOT"
-  voiceinput_run_cli smoke macos --audio-file "$audio_file"
 }
 
 voiceinput_linux_smoke_impl() {
@@ -634,223 +539,7 @@ EOF
   voiceinput_ensure_linux_dev_deps
   voiceinput_refresh_cargo_path
   cd "$REPO_ROOT"
-  voiceinput_run_cli_linux smoke linux --audio-file "$audio_file" --backend "$backend"
-}
-
-voiceinput_windows_smoke_impl() {
-  local audio_file=""
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --audio-file)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 --audio-file 的值" >&2
-          exit 2
-        fi
-        audio_file="$2"
-        shift 2
-        ;;
-      --model)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 --model 的值" >&2
-          exit 2
-        fi
-        if ! voiceinput_apply_model_choice_env "$2"; then
-          echo "不支持的模型：$2" >&2
-          exit 2
-        fi
-        shift 2
-        ;;
-      --help|-h)
-        cat >&2 <<'EOF'
-用法：
-  scripts/voiceinput.sh windows smoke --audio-file /path/to/audio.wav [--model funasr|qwen|qwen-0.6b]
-
-说明：
-  - 当前 Windows 路径会运行本地 ASR，并优先直接注入文本
-  - 如果直接注入失败，会回退到剪贴板粘贴
-  - 常驻热键和 TSF/COM 注入尚未接入
-  - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
-EOF
-        exit 0
-        ;;
-      *)
-        echo "不支持的参数：$1" >&2
-        exit 2
-        ;;
-    esac
-  done
-
-  if [[ -z "$audio_file" ]]; then
-    echo "用法：scripts/voiceinput.sh windows smoke --audio-file /path/to/audio.wav [--model funasr|qwen|qwen-0.6b]" >&2
-    exit 2
-  fi
-
-  voiceinput_ensure_cargo
-  voiceinput_ensure_uv
-  cd "$REPO_ROOT"
-  voiceinput_run_cli smoke windows --audio-file "$audio_file"
-}
-
-voiceinput_windows_install_impl() {
-  local audio_file=""
-  local run_smoke_after_bootstrap=false
-  local run_live_app_after_bootstrap=true
-  local -a bootstrap_args=()
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --audio-file)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 --audio-file 的值" >&2
-          exit 2
-        fi
-        audio_file="$2"
-        run_smoke_after_bootstrap=true
-        run_live_app_after_bootstrap=false
-        shift 2
-        ;;
-      --model|--backend|--model-id|--source-url|--local-dir|--revision|--device|--cuda-wheel-index|--install-cuda|--skip-existing)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 $1 的值" >&2
-          exit 2
-        fi
-        if [[ "$1" == "--model" ]]; then
-          if ! voiceinput_expand_model_args passthrough "$2"; then
-            echo "不支持的模型：$2" >&2
-            exit 2
-          fi
-          bootstrap_args+=("${VOICEINPUT_EXPANDED_MODEL_ARGS[@]}")
-        else
-          bootstrap_args+=("$1" "$2")
-        fi
-        shift 2
-        ;;
-      --no-launch)
-        run_live_app_after_bootstrap=false
-        shift
-        ;;
-      --help|-h)
-        cat >&2 <<'EOF'
-用法：
-  scripts/voiceinput.sh windows install [--model funasr|qwen|qwen-0.6b] [--audio-file /path/to/audio.wav]
-
-说明：
-  - 默认先执行 bootstrap，准备 Python 环境并下载模型
-  - 然后启动 Windows 常驻版
-  - 如果传入 --audio-file，会在准备完成后自动跑一次 Windows smoke
-  - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
-  - 当前常驻版支持全局热键、麦克风录音和文本直接注入 / 剪贴板回退
-EOF
-        exit 0
-        ;;
-      *)
-        echo "不支持的参数：$1" >&2
-        exit 2
-        ;;
-    esac
-  done
-
-  cd "$REPO_ROOT"
-  if ((${#bootstrap_args[@]} > 0)); then
-    voiceinput_run_bootstrap_args "${bootstrap_args[@]}"
-  else
-    voiceinput_run_bootstrap_args
-  fi
-
-  if [[ "$run_smoke_after_bootstrap" == true ]]; then
-    voiceinput_run_platform_smoke windows "$audio_file"
-  fi
-
-  if [[ "$run_live_app_after_bootstrap" != true ]]; then
-    return 0
-  fi
-
-  voiceinput_run_platform_live windows
-}
-
-voiceinput_macos_install_impl() {
-  local audio_file=""
-  local run_smoke_before_launch=false
-  local -a bootstrap_args=()
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --backend|--model|--model-id|--source-url|--local-dir|--revision|--device|--cuda-wheel-index|--install-cuda|--skip-existing)
-        if [[ "$1" == "--model" ]]; then
-          if [[ $# -lt 2 ]]; then
-            echo "缺少 $1 的值" >&2
-            exit 2
-          fi
-          if ! voiceinput_expand_model_args passthrough "$2"; then
-            echo "不支持的模型：$2" >&2
-            exit 2
-          fi
-          bootstrap_args+=("${VOICEINPUT_EXPANDED_MODEL_ARGS[@]}")
-          shift 2
-          continue
-        fi
-        bootstrap_args+=("$1")
-        if [[ "$1" != "--install-cuda" && "$1" != "--skip-existing" ]]; then
-          if [[ $# -lt 2 ]]; then
-            echo "缺少 $1 的值" >&2
-            exit 2
-          fi
-          bootstrap_args+=("$2")
-          shift 2
-        else
-          shift
-        fi
-        ;;
-      --audio-file)
-        if [[ $# -lt 2 ]]; then
-          echo "缺少 --audio-file 的值" >&2
-          exit 2
-        fi
-        audio_file="$2"
-        run_smoke_before_launch=true
-        shift 2
-        ;;
-      --skip-smoke)
-        run_smoke_before_launch=false
-        audio_file=""
-        shift
-        ;;
-      --help|-h)
-        cat >&2 <<'EOF'
-用法：
-  scripts/voiceinput.sh macos install [ASR 部署参数...] [--audio-file /path/to/audio.wav]
-
-说明：
-  - 先创建 Python 环境并下载本地模型
-  - 再启动 macOS 常驻 app
-  - 默认不再做系统输入法注册，也不再依赖重新登录
-  - 如果传入 --audio-file，会在启动前先运行一次 smoke 验证
-  - 默认会读取 config/voiceinput.env；如果要换文件，可以设置 VOICEINPUT_CONFIG_FILE
-  - 可选 ASR 部署参数会原样传给 scripts/voiceinput.sh bootstrap
-  - `--model funasr|qwen|qwen-0.6b` 会分别选择 FunASR、Qwen 1.7B、Qwen 0.6B
-EOF
-        exit 0
-        ;;
-      *)
-        bootstrap_args+=("$1")
-        shift
-        ;;
-    esac
-  done
-
-  cd "$REPO_ROOT"
-  if ((${#bootstrap_args[@]} > 0)); then
-    voiceinput_run_bootstrap_args "${bootstrap_args[@]}"
-  else
-    voiceinput_run_bootstrap_args
-  fi
-
-  if [[ "$run_smoke_before_launch" == true ]]; then
-    voiceinput_run_platform_smoke macos "$audio_file"
-  fi
-
-  voiceinput_run_platform_live macos
+  voiceinput_run_cli_linux smoke --audio-file "$audio_file" --backend "$backend"
 }
 
 voiceinput_linux_install_impl() {
@@ -968,7 +657,7 @@ voiceinput_setup_linux_autostart() {
   cd "$REPO_ROOT"
 
   echo "正在编译 release 二进制..."
-  cargo build -p voice-input-cli --features linux-ibus-smoke --release
+  cargo build -p voice-input-linux --features ibus --release
 
   local bin_dir="$HOME/.local/bin"
   local launcher_path="$bin_dir/voice-input"
@@ -988,7 +677,7 @@ if [[ -f "$REPO_ROOT/config/voiceinput.env" ]]; then
   set +a
 fi
 
-exec "$REPO_ROOT/target/release/voice-input-cli" live linux --backend "$$BACKEND_PLACEHOLDER$$"
+exec "$REPO_ROOT/target/release/voice-input-linux" live --backend "$$BACKEND_PLACEHOLDER$$"
 LAUNCHER
 
   sed -i "s|\$\$REPO_ROOT_PLACEHOLDER\$\$|$REPO_ROOT|g" "$launcher_path"
@@ -1048,211 +737,6 @@ voiceinput_remove_linux_autostart() {
   if [[ -f "$launcher_path" ]]; then
     rm -f "$launcher_path"
     echo "已移除启动脚本：$launcher_path"
-  fi
-}
-
-voiceinput_package_macos_impl() {
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --help|-h)
-        cat <<'EOF'
-用法：
-  scripts/voiceinput.sh macos package
-
-说明：
-  - 打包 macOS 常驻 app
-  - 默认输出到 dist/VoiceInput.app
-EOF
-        exit 0
-        ;;
-      *)
-        echo "不支持的参数：$1" >&2
-        exit 2
-        ;;
-    esac
-  done
-
-  if [[ "$(uname -s)" != "Darwin" ]]; then
-    echo "这个脚本只能在 macOS 上运行。" >&2
-    exit 1
-  fi
-
-  cd "$REPO_ROOT"
-  voiceinput_ensure_cargo
-  voiceinput_ensure_rustfmt
-
-  local app_name="${APP_NAME:-VoiceInput}"
-  local container_bundle_id="${CONTAINER_BUNDLE_ID:-com.example.voiceinput.container}"
-  local dist_dir="${DIST_DIR:-dist}"
-  local app_bundle="$dist_dir/$app_name.app"
-  local contents_dir="$app_bundle/Contents"
-  local macos_dir="$contents_dir/MacOS"
-  local resources_dir="$contents_dir/Resources"
-  local plist_file="$contents_dir/Info.plist"
-  local app_bin_name="voice-input-macos-app"
-  local app_bin_path="target/release/$app_bin_name"
-  local icon_source="/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericSpeaker.icns"
-  local icon_name="VoiceInput.icns"
-
-  echo "正在编译 macOS 常驻 app"
-  cargo build -p voice-input-macos --bin "$app_bin_name" --release
-
-  echo "正在组装 macOS 常驻 app：$app_bundle"
-  rm -rf "$app_bundle"
-  mkdir -p "$macos_dir" "$resources_dir"
-  cp "$app_bin_path" "$macos_dir/$app_name"
-  cp "$icon_source" "$resources_dir/$icon_name"
-
-  cat >"$contents_dir/PkgInfo" <<'EOF'
-APPL????
-EOF
-
-  cat >"$contents_dir/version.plist" <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
-  <key>CFBundleVersion</key>
-  <string>1</string>
-</dict>
-</plist>
-EOF
-
-  cat >"$plist_file" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>zh_CN</string>
-  <key>CFBundleDisplayName</key>
-  <string>$app_name</string>
-  <key>CFBundleExecutable</key>
-  <string>$app_name</string>
-  <key>CFBundleIdentifier</key>
-  <string>$container_bundle_id</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>$app_name</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleSupportedPlatforms</key>
-  <array>
-    <string>MacOSX</string>
-  </array>
-  <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
-  <key>CFBundleVersion</key>
-  <string>1</string>
-  <key>CFBundleSignature</key>
-  <string>????</string>
-  <key>LSUIElement</key>
-  <true/>
-  <key>LSMinimumSystemVersion</key>
-  <string>13.0</string>
-  <key>NSPrincipalClass</key>
-  <string>NSApplication</string>
-  <key>LSBackgroundOnly</key>
-  <true/>
-  <key>CFBundleIconFile</key>
-  <string>$icon_name</string>
-</dict>
-</plist>
-EOF
-
-  cat >"$extension_contents_dir/Info.plist" <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>zh_CN</string>
-  <key>CFBundleDisplayName</key>
-  <string>VoiceInput</string>
-  <key>CFBundleExecutable</key>
-  <string>VoiceInputInputMethod</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.example.voiceinput.inputmethod</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>VoiceInput</string>
-  <key>CFBundlePackageType</key>
-  <string>XPC!</string>
-  <key>CFBundleVersion</key>
-  <string>1</string>
-  <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
-  <key>NSExtension</key>
-  <dict>
-    <key>NSExtensionAttributes</key>
-    <dict>
-      <key>InputMethodConnectionName</key>
-      <string>com.example.voiceinput.inputmethod_Connection</string>
-      <key>InputMethodServerControllerClass</key>
-      <string>VoiceInputInputController</string>
-      <key>TISInputSourceID</key>
-      <string>com.example.voiceinput.inputmethod.default</string>
-      <key>TISIntendedLanguage</key>
-      <string>zh-Hans</string>
-      <key>TISParticipatesInTouchBar</key>
-      <true/>
-      <key>tsInputMethodCharacterRepertoireKey</key>
-      <array>
-        <string>Latn</string>
-      </array>
-      <key>NSMainNibFile</key>
-      <string>KeyboardService</string>
-      <key>CFBundleHelpBookFolder</key>
-      <string>VoiceInputHelp</string>
-      <key>CFBundleHelpBookName</key>
-      <string>VoiceInput Help</string>
-    </dict>
-    <key>NSExtensionPointIdentifier</key>
-    <string>com.apple.textinputmethod-services</string>
-    <key>NSExtensionPrincipalClass</key>
-    <string>IMKExtension</string>
-  </dict>
-  <key>CFBundleIconFile</key>
-  <string>$icon_name</string>
-</dict>
-</plist>
-EOF
-
-  echo "正在输出应用包：$app_bundle"
-  echo "Container Bundle ID: $container_bundle_id"
-}
-
-voiceinput_dev_install_macos_impl() {
-  local -a install_args=("$@")
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --help|-h)
-        cat <<'EOF'
-用法：
-  scripts/voiceinput.sh macos dev-install [ASR 部署参数...] [--audio-file /path/to/audio.wav]
-
-说明：
-  - 这个命令会复用 macos install 的默认 app 模式
-  - 适合开发时一次完成依赖准备、模型部署和 app 启动
-EOF
-        exit 0
-        ;;
-      *)
-        echo "不支持的参数：$1" >&2
-        exit 2
-        ;;
-    esac
-  done
-
-  if ((${#install_args[@]} > 0)); then
-    voiceinput_macos_install_impl "${install_args[@]}"
-  else
-    voiceinput_macos_install_impl
   fi
 }
 
@@ -1415,7 +899,7 @@ PY
 
   echo "FunASR 开发服务已就绪：$socket_path"
   VOICEINPUT_FUNASR_SOCKET="$socket_path" \
-    voiceinput_run_cli_linux live linux "${app_args[@]}"
+    voiceinput_run_cli_linux live "${app_args[@]}"
 }
 
 usage() {
@@ -1428,23 +912,17 @@ usage() {
   model                  写入仓库级默认模型配置
 
 平台子命令：
-  macos install          准备依赖、下载模型并启动 macOS 常驻 app
-  macos package          打包 macOS 常驻 app
-  macos smoke            运行 macOS smoke
-  macos dev-install      开发时准备依赖、下载模型并启动 app
   linux install          安装并启动 Linux 常驻版
   linux uninstall        移除 Linux 常驻版及开机自启
   linux smoke            运行 Linux smoke
   linux dev              启动 Linux 开发常驻服务
   linux dev-streaming    启动 Linux FunASR 流式开发服务
-  windows install        安装并启动 Windows 常驻版
-  windows smoke          运行 Windows smoke
 
 说明：
   - 所有子命令都会继续兼容现有脚本参数
   - 默认配置来自 config/voiceinput.env
-  - 脚本内部会统一转调到 `voice-input-cli`
-  - 也可以直接运行 `cargo run -p voice-input-cli -- <smoke|live> <macos|linux|windows> ...`
+  - 脚本内部会统一转调到 `voice-input-linux`
+  - 也可以直接运行 `cargo run -p voice-input-linux --features ibus -- <smoke|live> ...`
 EOF
 }
 
@@ -1456,7 +934,7 @@ fi
 
 shift || true
 
-if [[ "$cmd" == "macos" || "$cmd" == "linux" || "$cmd" == "windows" ]]; then
+if [[ "$cmd" == "linux" ]]; then
   platform="$cmd"
   action="${1:-}"
   if [[ -z "$action" || "$action" == "--help" || "$action" == "-h" ]]; then
@@ -1467,21 +945,12 @@ if [[ "$cmd" == "macos" || "$cmd" == "linux" || "$cmd" == "windows" ]]; then
   cmd="${platform}-${action}"
 fi
 
-  case "$cmd" in
+case "$cmd" in
   model)
     voiceinput_model_impl "$@"
     ;;
   bootstrap)
     voiceinput_bootstrap_impl "$@"
-    ;;
-  macos-install)
-    voiceinput_macos_install_impl "$@"
-    ;;
-  macos-package)
-    voiceinput_package_macos_impl "$@"
-    ;;
-  macos-smoke)
-    voiceinput_macos_smoke_impl "$@"
     ;;
   linux-install)
     voiceinput_linux_install_impl "$@"
@@ -1489,17 +958,8 @@ fi
   linux-uninstall)
     voiceinput_remove_linux_autostart
     ;;
-  windows-install)
-    voiceinput_windows_install_impl "$@"
-    ;;
   linux-smoke)
     voiceinput_linux_smoke_impl "$@"
-    ;;
-  windows-smoke)
-    voiceinput_windows_smoke_impl "$@"
-    ;;
-  macos-dev-install)
-    voiceinput_dev_install_macos_impl "$@"
     ;;
   linux-dev)
     voiceinput_linux_dev_streaming_impl "$@"
