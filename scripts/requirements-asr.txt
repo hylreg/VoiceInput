@@ -1,2 +1,0 @@
--r requirements-asr-base.txt
--r requirements-asr-runtime.txt

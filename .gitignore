@@ -15,9 +15,6 @@ __pycache__/
 # Local model cache and other generated assets
 models/
 
-# macOS metadata
-.DS_Store
-
 # Editor and OS noise
 .idea/
 .vscode/
