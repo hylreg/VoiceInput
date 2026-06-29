@@ -1,9 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use voice_input_asr::{
-    FunAsrConfig, FunAsrStreamingRunner, LocalFunAsrTranscriber, PythonFunAsrRunner,
-};
+use voice_input_asr::{FunAsrConfig, LocalFunAsrTranscriber, PythonFunAsrRunner};
 use voice_input_core::{
     AppConfig, AppController, AudioRecorder, InputMethodHost, MockHotkeyManager, Result,
 };
@@ -42,37 +40,6 @@ pub fn run_python_live_job(
 ) -> Result<String> {
     let controller = build_python_live_controller(app, asr, recorder, host)?;
     run_controller_job(&controller)
-}
-
-pub fn run_streaming_live_cycle<Record, BeforeCommit>(
-    host: &dyn InputMethodHost,
-    transcriber: &LocalFunAsrTranscriber,
-    preview_runner: Option<&dyn FunAsrStreamingRunner>,
-    formatter: fn(Option<&str>) -> String,
-    record: Record,
-    before_commit: BeforeCommit,
-) -> Result<String>
-where
-    Record: FnOnce(&LivePreviewSession<'_>, Option<&dyn FunAsrStreamingRunner>) -> Result<Vec<u8>>,
-    BeforeCommit: FnOnce() -> Result<()>,
-{
-    let session = LivePreviewSession::begin(host, formatter)?;
-    let audio = record(&session, preview_runner)?;
-    let transcript = transcriber
-        .transcribe_allow_empty(&audio)?
-        .trim()
-        .to_string();
-
-    if transcript.trim().is_empty() {
-        return Err(voice_input_core::VoiceInputError::Transcription(
-            "转写结果为空".to_string(),
-        ));
-    }
-
-    session.update_preview(Some(&transcript))?;
-    before_commit()?;
-    session.commit(&transcript)?;
-    Ok(transcript)
 }
 
 pub fn rollback_live_host(host: &dyn InputMethodHost) {
@@ -144,25 +111,6 @@ where
         })?;
 
     Ok(true)
-}
-
-pub fn stream_preview_chunk(
-    runner: &dyn FunAsrStreamingRunner,
-    session: &LivePreviewSession<'_>,
-    sample_rate: u32,
-    samples: &[i16],
-    is_final: bool,
-) -> Result<()> {
-    if samples.is_empty() && !is_final {
-        return Ok(());
-    }
-
-    let text = runner.stream_chunk(samples, sample_rate, is_final)?;
-    if text.trim().is_empty() {
-        return Ok(());
-    }
-
-    session.update_preview(Some(&text))
 }
 
 #[derive(Default)]
@@ -305,82 +253,11 @@ impl Drop for LiveHostSession<'_> {
     }
 }
 
-pub struct LivePreviewSession<'a> {
-    inner: LiveHostSession<'a>,
-    formatter: fn(Option<&str>) -> String,
-}
-
-impl<'a> LivePreviewSession<'a> {
-    pub fn begin(
-        host: &'a dyn InputMethodHost,
-        formatter: fn(Option<&str>) -> String,
-    ) -> Result<Self> {
-        let inner = LiveHostSession::begin(host, Some(&formatter(None)))?;
-        Ok(Self { inner, formatter })
-    }
-
-    pub fn update_preview(&self, preview: Option<&str>) -> Result<()> {
-        self.inner.update_preedit(&(self.formatter)(preview))
-    }
-
-    pub fn commit(self, text: &str) -> Result<()> {
-        self.inner.commit(text)
-    }
-
-    pub fn rollback(self) {
-        self.inner.rollback();
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        run_logged_queued_live_job, run_streaming_live_cycle, stream_preview_chunk,
-        LiveHostSession, LiveJobState, LivePreviewSession, QueuedLiveJobState,
-    };
-    use std::cell::RefCell;
+    use super::{run_logged_queued_live_job, LiveHostSession, LiveJobState, QueuedLiveJobState};
     use std::sync::Arc;
-    use voice_input_asr::{
-        FunAsrConfig, FunAsrRequest, FunAsrRunner, FunAsrStreamingRunner, LocalFunAsrTranscriber,
-    };
     use voice_input_core::{InputMethodHost, MockInputMethodHost, Result, VoiceInputError};
-
-    struct MockStreamingRunner {
-        responses: RefCell<Vec<String>>,
-    }
-
-    impl MockStreamingRunner {
-        fn new(responses: &[&str]) -> Self {
-            Self {
-                responses: RefCell::new(
-                    responses
-                        .iter()
-                        .rev()
-                        .map(|value| value.to_string())
-                        .collect(),
-                ),
-            }
-        }
-    }
-
-    impl FunAsrStreamingRunner for MockStreamingRunner {
-        fn stream_chunk(
-            &self,
-            _samples: &[i16],
-            _sample_rate: u32,
-            _is_final: bool,
-        ) -> Result<String> {
-            Ok(self.responses.borrow_mut().pop().unwrap_or_default())
-        }
-    }
-
-    struct MockRunner;
-
-    impl FunAsrRunner for MockRunner {
-        fn transcribe(&self, _request: FunAsrRequest) -> Result<String> {
-            Ok("最终结果".to_string())
-        }
-    }
 
     struct FailingPreeditHost;
 
@@ -433,107 +310,6 @@ mod tests {
             Ok(_) => panic!("preedit should fail"),
             Err(err) => assert!(err.to_string().contains("preedit failed")),
         }
-    }
-
-    fn recording_text(preview: Option<&str>) -> String {
-        match preview {
-            Some(text) if !text.trim().is_empty() => format!("录音中 {}", text.trim()),
-            _ => "录音中".to_string(),
-        }
-    }
-
-    #[test]
-    fn live_preview_session_formats_preview_updates() {
-        let host = MockInputMethodHost::default();
-        let session =
-            LivePreviewSession::begin(&host, recording_text).expect("begin preview session");
-        session
-            .update_preview(Some("你好 世界"))
-            .expect("update preview");
-        session.commit("你好 世界").expect("commit preview session");
-
-        assert_eq!(
-            host.events(),
-            vec![
-                "开始输入".to_string(),
-                "更新预编辑：录音中".to_string(),
-                "更新预编辑：录音中 你好 世界".to_string(),
-                "提交文本：你好 世界".to_string(),
-                "结束输入".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn stream_preview_chunk_ignores_empty_intermediate_samples() {
-        let host = MockInputMethodHost::default();
-        let session =
-            LivePreviewSession::begin(&host, recording_text).expect("begin preview session");
-        let runner = MockStreamingRunner::new(&["预览"]);
-
-        stream_preview_chunk(&runner, &session, 16_000, &[], false).expect("skip empty chunk");
-        session.rollback();
-
-        assert_eq!(
-            host.events(),
-            vec![
-                "开始输入".to_string(),
-                "更新预编辑：录音中".to_string(),
-                "取消输入".to_string(),
-                "结束输入".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn stream_preview_chunk_updates_preedit_when_runner_returns_text() {
-        let host = MockInputMethodHost::default();
-        let session =
-            LivePreviewSession::begin(&host, recording_text).expect("begin preview session");
-        let runner = MockStreamingRunner::new(&["预览结果"]);
-
-        stream_preview_chunk(&runner, &session, 16_000, &[1, 2, 3], false)
-            .expect("update preview from runner");
-        session.rollback();
-
-        assert_eq!(
-            host.events(),
-            vec![
-                "开始输入".to_string(),
-                "更新预编辑：录音中".to_string(),
-                "更新预编辑：录音中 预览结果".to_string(),
-                "取消输入".to_string(),
-                "结束输入".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn run_streaming_live_cycle_commits_after_before_commit_hook() {
-        let host = MockInputMethodHost::default();
-        let transcriber =
-            LocalFunAsrTranscriber::new(FunAsrConfig::funasr_default(), Box::new(MockRunner));
-        let result = run_streaming_live_cycle(
-            &host,
-            &transcriber,
-            None,
-            recording_text,
-            |_session, _runner| Ok(vec![1, 2, 3]),
-            || Ok(()),
-        )
-        .expect("streaming cycle should succeed");
-
-        assert_eq!(result, "最终结果");
-        assert_eq!(
-            host.events(),
-            vec![
-                "开始输入".to_string(),
-                "更新预编辑：录音中".to_string(),
-                "更新预编辑：录音中 最终结果".to_string(),
-                "提交文本：最终结果".to_string(),
-                "结束输入".to_string(),
-            ]
-        );
     }
 
     #[test]

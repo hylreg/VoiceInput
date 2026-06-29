@@ -4,8 +4,6 @@ mod runner;
 mod transcriber;
 
 pub use config::{AsrBackend, FunAsrConfig};
-pub use funasr::{
-    MockFunAsrRunner, PythonFunAsrRunner, PythonFunAsrStreamingRunner, SocketFunAsrStreamingRunner,
-};
-pub use runner::{FunAsrRequest, FunAsrRunner, FunAsrStreamingRunner};
+pub use funasr::{MockFunAsrRunner, PythonFunAsrRunner};
+pub use runner::{FunAsrRequest, FunAsrRunner};
 pub use transcriber::LocalFunAsrTranscriber;

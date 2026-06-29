@@ -2,8 +2,6 @@
 
 #[cfg(target_os = "linux")]
 mod linux_runtime {
-    use std::cell::RefCell;
-    use std::env;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,15 +14,9 @@ mod linux_runtime {
     use crate::recorder::LinuxMicAudioRecorder;
     use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
     use fs2::FileExt;
-    use voice_input_asr::{
-        FunAsrConfig, FunAsrRunner, FunAsrStreamingRunner, LocalFunAsrTranscriber,
-        PythonFunAsrRunner, PythonFunAsrStreamingRunner, SocketFunAsrStreamingRunner,
-    };
-    use voice_input_core::{AppConfig, Result, VoiceInputError};
-    use crate::live::{
-        print_live_ready, run_streaming_live_cycle, stream_preview_chunk, LiveJobHandle,
-        LiveJobState,
-    };
+    use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber, PythonFunAsrRunner};
+    use voice_input_core::{AppConfig, InputMethodHost, Result, VoiceInputError};
+    use crate::live::{print_live_ready, LiveJobHandle, LiveJobState};
 
     #[derive(Debug, Clone)]
     pub struct LinuxLiveAppConfig {
@@ -114,39 +106,19 @@ mod linux_runtime {
         }
     }
 
-    fn recording_indicator_text(preview: Option<&str>) -> String {
-        match preview {
-            Some(text) if !text.trim().is_empty() => format!("录音中 {}", text.trim()),
-            _ => "录音中".to_string(),
-        }
-    }
-
-    fn build_linux_asr(
-        config: &FunAsrConfig,
-    ) -> Result<(
-        Box<dyn FunAsrRunner>,
-        Option<Box<dyn FunAsrStreamingRunner>>,
-    )> {
-        if let Ok(socket_path) = env::var("VOICEINPUT_FUNASR_SOCKET") {
-            println!("检测到外部 ASR 调试服务：{socket_path}");
-            let runner = SocketFunAsrStreamingRunner::connect(socket_path, config.clone())?;
-            return Ok((Box::new(runner.clone()), Some(Box::new(runner))));
-        }
-
+    fn build_linux_asr(config: &FunAsrConfig) -> Result<Box<dyn FunAsrRunner>> {
         if config.is_qwen() {
-            return Ok((Box::new(PythonFunAsrRunner::connect(config.clone())?), None));
+            return Ok(Box::new(PythonFunAsrRunner::connect(config.clone())?));
         }
 
         let runner = PythonFunAsrRunner::connect(config.clone())?;
-        let streaming_runner = PythonFunAsrStreamingRunner::connect(config.clone())?;
-        Ok((Box::new(runner), Some(Box::new(streaming_runner))))
+        Ok(Box::new(runner))
     }
 
     fn run_recording_cycle(
         recorder: &LinuxMicAudioRecorder,
         host: &LinuxInputMethodHost,
         transcriber: &LocalFunAsrTranscriber,
-        preview_runner: Option<&dyn FunAsrStreamingRunner>,
         silence_stop_timeout: Duration,
         tray: Option<&LinuxTrayHandle>,
         watcher: &LinuxHotkeyWatcher,
@@ -158,60 +130,42 @@ mod linux_runtime {
 
         println!("正在录音...");
         let silence_stop_enabled = Arc::new(AtomicBool::new(true));
-        let preview_error = RefCell::new(None::<String>);
-        let result = run_streaming_live_cycle(
-            host,
-            transcriber,
-            preview_runner,
-            recording_indicator_text,
-            |session, preview_runner| {
-                let audio = recorder.record_once_with_chunks(
-                    Duration::from_millis(100),
-                    silence_stop_timeout,
-                    Arc::clone(&silence_stop_enabled),
-                    |sample_rate, samples, is_final| {
-                        let Some(preview_runner) = preview_runner else {
-                            return;
-                        };
-                        if let Err(err) = stream_preview_chunk(
-                            preview_runner,
-                            session,
-                            sample_rate,
-                            &samples,
-                            is_final,
-                        ) {
-                            *preview_error.borrow_mut() = Some(format!("流式预览失败：{err}"));
-                        }
-                    },
-                );
-                audio
-            },
-            || {
-                if let Some(err) = preview_error.borrow_mut().take() {
-                    return Err(voice_input_core::VoiceInputError::Transcription(err));
-                }
-
-                if let Some(tray) = tray {
-                    tray.set_recording(false);
-                    if tray.is_quit_requested() {
-                        watcher.stop();
-                    }
-                }
-
-                Ok(())
-            },
+        let audio = recorder.record_once_with_chunks(
+            Duration::from_millis(100),
+            silence_stop_timeout,
+            Arc::clone(&silence_stop_enabled),
+            |_, _, _| {},
         );
 
-        match result {
-            Ok(transcript) => {
-                if let Some(tray) = tray {
-                    tray.set_recording(false);
-                    if tray.is_quit_requested() {
-                        watcher.stop();
-                        return Ok(true);
-                    }
+        if let Some(tray) = tray {
+            tray.set_recording(false);
+            if tray.is_quit_requested() {
+                watcher.stop();
+                return Ok(true);
+            }
+        }
+
+        match audio {
+            Ok(audio_data) => {
+                let transcript = transcriber
+                    .transcribe_allow_empty(&audio_data)?
+                    .trim()
+                    .to_string();
+
+                if transcript.trim().is_empty() {
+                    eprintln!("转写结果为空");
+                    return Ok(false);
                 }
+
                 println!("识别结果：{transcript}");
+
+                host.start_composition()?;
+                if let Err(err) = host.commit_text(&transcript) {
+                    let _ = host.cancel_composition();
+                    let _ = host.end_composition();
+                    return Err(err);
+                }
+                host.end_composition()?;
             }
             Err(err) => {
                 if let Some(tray) = tray {
@@ -246,7 +200,7 @@ mod linux_runtime {
         )?;
         let host = LinuxInputMethodHost::new(config.host.clone());
         println!("正在预加载 ASR 模型...");
-        let (asr_runner, preview_runner) = build_linux_asr(&config.asr)?;
+        let asr_runner = build_linux_asr(&config.asr)?;
         let transcriber = LocalFunAsrTranscriber::new(config.asr.clone(), asr_runner);
         println!("ASR 模型预加载完成");
         let tray = if config.show_status_item {
@@ -304,7 +258,6 @@ mod linux_runtime {
                 &recorder,
                 &host,
                 &transcriber,
-                preview_runner.as_deref(),
                 config.silence_stop_timeout,
                 tray.as_ref(),
                 &watcher,
