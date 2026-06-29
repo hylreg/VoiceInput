@@ -2,7 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::backend::LinuxBackendKind;
 use crate::host::{LinuxHostConfig, LinuxInputMethodHost};
@@ -128,12 +128,14 @@ fn run_recording_cycle(
 
     println!("正在录音...");
     let silence_stop_enabled = Arc::new(AtomicBool::new(true));
+    let record_start = Instant::now();
     let audio = recorder.record_once_with_chunks(
         Duration::from_millis(100),
         silence_stop_timeout,
         Arc::clone(&silence_stop_enabled),
         |_, _, _| {},
     );
+    let record_duration = record_start.elapsed();
 
     // 移除录音提示符
     let _ = backspace_in_active_window(1, None);
@@ -146,6 +148,15 @@ fn run_recording_cycle(
             watcher.stop();
             return Ok(true);
         }
+    }
+
+    // 录音时长不足 800ms，很可能是快速双击启停，没有真正说话。
+    // 直接丢弃，不做 ASR 转写，避免模型对噪声幻觉出"恩"等无效文本。
+    if record_duration < Duration::from_millis(800) {
+        eprintln!("录音时长不足（{}ms），跳过转写", record_duration.as_millis());
+        let _ = host.cancel_composition();
+        let _ = host.end_composition();
+        return Ok(false);
     }
 
     match audio {
