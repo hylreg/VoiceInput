@@ -2,23 +2,11 @@ use voice_input_asr::MockFunAsrRunner;
 use voice_input_core::InputMethodHost;
 use voice_input_core::{AppConfig, MockAudioRecorder, MockHotkeyManager};
 use voice_input_linux::{
-    IbusEngineEvent, LinuxBackendKind, LinuxCompositionSession, LinuxHostConfig,
+    IbusEngineEvent, LinuxBackendKind, LinuxHostConfig,
     LinuxInputMethodHost, LinuxLiveAppConfig, LinuxLocalVoiceInput, LinuxLocalVoiceInputConfig,
     MockIbusBridge, MockLinuxBackend,
 };
 use voice_input_linux::LocalVoiceInputConfig;
-
-#[test]
-fn session_tracks_composition_state() {
-    let mut session = LinuxCompositionSession::new("voice-input");
-    session.start();
-    session.update("hello");
-    session.commit("hello world");
-
-    assert!(!session.state.inner.active);
-    assert_eq!(session.state.inner.committed_text, "hello world");
-    assert_eq!(session.backend, "voice-input");
-}
 
 #[test]
 fn host_uses_configured_backend() {

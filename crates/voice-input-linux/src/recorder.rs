@@ -1,31 +1,18 @@
-use std::time::Duration;
-
-use std::sync::atomic::AtomicBool;
-
-#[cfg(target_os = "linux")]
-use std::sync::atomic::Ordering;
-#[cfg(not(target_os = "linux"))]
-use std::sync::Arc;
-#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-#[cfg(target_os = "linux")]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub use voice_input_audio::FileAudioRecorder;
-use voice_input_core::{AudioRecorder, Result, VoiceInputError};
-
-#[cfg(target_os = "linux")]
 use voice_input_audio::{
     has_voice_activity, push_mono_i16_f32, push_mono_i16_i16, push_mono_i16_u16, write_pcm_wav,
 };
+use voice_input_core::{AudioRecorder, Result, VoiceInputError};
 
-#[cfg(target_os = "linux")]
 #[derive(Debug, Clone)]
 pub struct LinuxMicAudioRecorder {
     inner: Arc<LinuxMicAudioRecorderInner>,
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct LinuxMicAudioRecorderInner {
     recording: AtomicBool,
@@ -34,14 +21,12 @@ struct LinuxMicAudioRecorderInner {
     max_duration: Duration,
 }
 
-#[cfg(target_os = "linux")]
 impl Default for LinuxMicAudioRecorder {
     fn default() -> Self {
         Self::new(Duration::from_secs(30))
     }
 }
 
-#[cfg(target_os = "linux")]
 impl LinuxMicAudioRecorder {
     pub fn new(max_duration: Duration) -> Self {
         Self {
@@ -249,7 +234,6 @@ impl LinuxMicAudioRecorder {
     }
 }
 
-#[cfg(target_os = "linux")]
 impl AudioRecorder for LinuxMicAudioRecorder {
     fn record_once(&self) -> Result<Vec<u8>> {
         self.record_once_with_chunks(
@@ -258,46 +242,5 @@ impl AudioRecorder for LinuxMicAudioRecorder {
             Arc::new(AtomicBool::new(true)),
             |_, _, _| {},
         )
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-#[derive(Debug, Clone)]
-pub struct LinuxMicAudioRecorder;
-
-#[cfg(not(target_os = "linux"))]
-impl LinuxMicAudioRecorder {
-    pub fn new(_max_duration: Duration) -> Self {
-        Self
-    }
-
-    pub fn stop(&self) {}
-
-    pub fn is_recording(&self) -> bool {
-        false
-    }
-
-    pub fn record_once_with_chunks<F>(
-        &self,
-        _chunk_interval: Duration,
-        _silence_stop_timeout: Duration,
-        _silence_stop_enabled: Arc<AtomicBool>,
-        _on_snapshot: F,
-    ) -> Result<Vec<u8>>
-    where
-        F: FnMut(u32, Vec<i16>, bool),
-    {
-        Err(VoiceInputError::Audio(
-            "Linux 麦克风录音只支持 Linux".to_string(),
-        ))
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-impl AudioRecorder for LinuxMicAudioRecorder {
-    fn record_once(&self) -> Result<Vec<u8>> {
-        Err(VoiceInputError::Audio(
-            "Linux 麦克风录音只支持 Linux".to_string(),
-        ))
     }
 }

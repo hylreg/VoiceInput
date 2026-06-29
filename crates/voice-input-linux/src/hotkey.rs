@@ -1,24 +1,14 @@
-#[cfg(target_os = "linux")]
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-use std::time::Duration;
-
-#[cfg(target_os = "linux")]
 use std::sync::atomic::Ordering;
-#[cfg(target_os = "linux")]
 use std::sync::mpsc;
-#[cfg(target_os = "linux")]
+use std::sync::Arc;
 use std::thread;
-#[cfg(target_os = "linux")]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use voice_input_core::{Result, VoiceInputError};
 use crate::live::LiveJobState;
-
-#[cfg(target_os = "linux")]
 use device_query::{DeviceQuery, DeviceState, Keycode};
+use voice_input_core::{Result, VoiceInputError};
 
-#[cfg(target_os = "linux")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxHotkeySpec {
     double_ctrl: bool,
@@ -29,7 +19,6 @@ pub struct LinuxHotkeySpec {
     meta: bool,
 }
 
-#[cfg(target_os = "linux")]
 impl LinuxHotkeySpec {
     pub fn parse(spec: &str) -> Result<Self> {
         let mut parsed = LinuxHotkeySpec {
@@ -147,7 +136,6 @@ impl LinuxHotkeySpec {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn keycode_from_token(token: char) -> Result<Keycode> {
     let key = match token.to_ascii_lowercase() {
         'a' => Keycode::A,
@@ -196,12 +184,10 @@ fn keycode_from_token(token: char) -> Result<Keycode> {
     Ok(key)
 }
 
-#[cfg(target_os = "linux")]
 fn has_any(keys: &[Keycode], candidates: &[Keycode]) -> bool {
     candidates.iter().any(|candidate| keys.contains(candidate))
 }
 
-#[cfg(target_os = "linux")]
 fn is_ctrl_only(keys: &[Keycode]) -> bool {
     !keys.is_empty()
         && keys
@@ -209,57 +195,12 @@ fn is_ctrl_only(keys: &[Keycode]) -> bool {
             .all(|key| matches!(key, Keycode::LControl | Keycode::RControl))
 }
 
-#[cfg(not(target_os = "linux"))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinuxHotkeySpec;
-
-#[cfg(not(target_os = "linux"))]
-impl LinuxHotkeySpec {
-    pub fn parse(_spec: &str) -> Result<Self> {
-        Err(VoiceInputError::Hotkey(
-            "Linux 热键监听只支持 Linux".to_string(),
-        ))
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-pub struct LinuxHotkeyWatcher;
-
-#[cfg(not(target_os = "linux"))]
-impl LinuxHotkeyWatcher {
-    pub fn spawn(
-        _spec: LinuxHotkeySpec,
-        _active: Arc<LiveJobState>,
-        _recorder: crate::recorder::LinuxMicAudioRecorder,
-    ) -> Result<Self> {
-        Err(VoiceInputError::Hotkey(
-            "Linux 热键监听只支持 Linux".to_string(),
-        ))
-    }
-
-    pub fn wait_for_trigger(&self) -> Result<()> {
-        Err(VoiceInputError::Hotkey(
-            "Linux 热键监听只支持 Linux".to_string(),
-        ))
-    }
-
-    pub fn wait_for_trigger_timeout(&self, _timeout: Duration) -> Result<bool> {
-        Err(VoiceInputError::Hotkey(
-            "Linux 热键监听只支持 Linux".to_string(),
-        ))
-    }
-
-    pub fn stop(&self) {}
-}
-
-#[cfg(target_os = "linux")]
 pub struct LinuxHotkeyWatcher {
     receiver: mpsc::Receiver<()>,
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
-#[cfg(target_os = "linux")]
 impl LinuxHotkeyWatcher {
     pub fn spawn(
         spec: LinuxHotkeySpec,
@@ -382,7 +323,6 @@ impl LinuxHotkeyWatcher {
     }
 }
 
-#[cfg(target_os = "linux")]
 impl Drop for LinuxHotkeyWatcher {
     fn drop(&mut self) {
         self.stop();
@@ -393,7 +333,6 @@ impl Drop for LinuxHotkeyWatcher {
 }
 
 #[cfg(test)]
-#[cfg(target_os = "linux")]
 mod tests {
     use super::*;
 

@@ -1,6 +1,3 @@
-#![allow(unexpected_cfgs)]
-
-#[cfg(target_os = "linux")]
 mod linux_tray {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -218,67 +215,4 @@ mod linux_tray {
     }
 }
 
-#[cfg(target_os = "linux")]
 pub use linux_tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
-
-#[cfg(not(target_os = "linux"))]
-mod not_linux {
-    use std::sync::atomic::AtomicBool;
-    use std::sync::Arc;
-
-    use crate::recorder::LinuxMicAudioRecorder;
-    use voice_input_core::{Result, VoiceInputError};
-
-    #[derive(Debug, Clone)]
-    pub struct LinuxTrayConfig {
-        pub service_name: String,
-        pub title: String,
-        pub recorder: LinuxMicAudioRecorder,
-        pub quit_requested: Arc<AtomicBool>,
-    }
-
-    impl LinuxTrayConfig {
-        pub fn new(
-            service_name: impl Into<String>,
-            title: impl Into<String>,
-            recorder: LinuxMicAudioRecorder,
-            quit_requested: Arc<AtomicBool>,
-        ) -> Self {
-            Self {
-                service_name: service_name.into(),
-                title: title.into(),
-                recorder,
-                quit_requested,
-            }
-        }
-    }
-
-    pub struct LinuxTrayHandle;
-
-    impl LinuxTrayHandle {
-        pub fn spawn(_config: LinuxTrayConfig) -> Result<Self> {
-            Err(VoiceInputError::Injection(
-                "Linux 状态栏只支持 Linux".to_string(),
-            ))
-        }
-
-        pub fn set_recording(&self, _recording: bool) {}
-
-        pub fn request_quit(&self) {}
-
-        pub fn is_quit_requested(&self) -> bool {
-            false
-        }
-
-        pub fn shutdown(&self) {}
-    }
-
-    pub fn spawn_linux_tray(_config: LinuxTrayConfig) -> Result<LinuxTrayHandle> {
-        Err(VoiceInputError::Injection(
-            "Linux 状态栏只支持 Linux".to_string(),
-        ))
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-pub use not_linux::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
