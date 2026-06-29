@@ -108,6 +108,25 @@ fn build_linux_asr(config: &FunAsrConfig) -> Result<Box<dyn FunAsrRunner>> {
     Ok(Box::new(runner))
 }
 
+/// 从 WAV 字节中扫描 "data" chunk，解析 PCM i16 检查峰值。
+/// 峰值 > 800（约满量程 2.4%）认为有有效语音。
+fn wav_has_voice_activity(wav: &[u8]) -> bool {
+    // 扫描 "data" RIFF chunk：在 WAV 头中查找 b"data" 标记
+    let offset = match wav.windows(4).position(|w| w == b"data") {
+        Some(pos) => pos + 8, // "data" (4) + chunk size (4)
+        None => return false,
+    };
+
+    // chunk size 后面紧跟着 PCM i16 little-endian 采样数据
+    wav.get(offset..)
+        .map(|data| {
+            data.chunks_exact(2)
+                .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                .any(|s| s.abs() > 800)
+        })
+        .unwrap_or(false)
+}
+
 fn run_recording_cycle(
     recorder: &LinuxMicAudioRecorder,
     host: &LinuxInputMethodHost,
@@ -150,14 +169,10 @@ fn run_recording_cycle(
 
     match audio {
         Ok(audio_data) => {
-            // 直接从 WAV 数据检测语音活动：跳过 44 字节 WAV 头，
-            // 将 PCM i16 样本逐对解析，检查是否存在峰值 > 800 的样本。
-            // 无峰值意味着整段录音只有底噪，跳过 ASR 防止幻觉。
-            let has_voice = audio_data.len() >= 44
-                && audio_data[44..]
-                    .chunks_exact(2)
-                    .map(|c| i16::from_le_bytes([c[0], c[1]]))
-                    .any(|s| s.abs() > 800);
+            // 从 WAV 中扫描 "data" chunk 起点，正确跳过 RIFF/WAVE/fmt 头。
+            // 之前硬编码 44 字节偏移导致 WAV 头被误当音频数据，
+            // RIFF 标识符的字节值转成 i16 远超阈值，任何录音都被判有语音。
+            let has_voice = wav_has_voice_activity(&audio_data);
 
             if !has_voice {
                 eprintln!("录音中未检测到有效语音，跳过转写");
