@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -128,19 +128,11 @@ fn run_recording_cycle(
 
     println!("正在录音...");
     let silence_stop_enabled = Arc::new(AtomicBool::new(true));
-    let voice_chunks = Arc::new(AtomicUsize::new(0));
-    let voice_chunks_for_callback = Arc::clone(&voice_chunks);
     let audio = recorder.record_once_with_chunks(
         Duration::from_millis(100),
         silence_stop_timeout,
         Arc::clone(&silence_stop_enabled),
-        move |_, samples, _| {
-                // 用峰值检测而非 RMS，对抗 AGC 放大带来的高声底噪。
-                // 人声的瞬时峰值通常 > 2000，环境噪声即使经 AGC 也很难到 1000。
-                if samples.iter().any(|s| s.abs() > 1000) {
-                    voice_chunks_for_callback.fetch_add(1, Ordering::SeqCst);
-                }
-            },
+        |_, _, _| {},
     );
 
     // 移除录音提示符
@@ -156,17 +148,24 @@ fn run_recording_cycle(
         }
     }
 
-    // 语音活动需要至少持续 200ms（2 个 chunk）才送 ASR，
-    // 防止单块噪声峰值误触发导致幻觉输出。
-    if voice_chunks.load(Ordering::SeqCst) < 2 {
-        eprintln!("未检测到有效语音活动（{} 块），跳过转写", voice_chunks.load(Ordering::SeqCst));
-        let _ = host.cancel_composition();
-        let _ = host.end_composition();
-        return Ok(false);
-    }
-
     match audio {
         Ok(audio_data) => {
+            // 直接从 WAV 数据检测语音活动：跳过 44 字节 WAV 头，
+            // 将 PCM i16 样本逐对解析，检查是否存在峰值 > 800 的样本。
+            // 无峰值意味着整段录音只有底噪，跳过 ASR 防止幻觉。
+            let has_voice = audio_data.len() >= 44
+                && audio_data[44..]
+                    .chunks_exact(2)
+                    .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                    .any(|s| s.abs() > 800);
+
+            if !has_voice {
+                eprintln!("录音中未检测到有效语音，跳过转写");
+                let _ = host.cancel_composition();
+                let _ = host.end_composition();
+                return Ok(false);
+            }
+
             let transcript = transcriber
                 .transcribe_allow_empty(&audio_data)?
                 .trim()
