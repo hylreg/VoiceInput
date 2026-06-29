@@ -11,7 +11,6 @@ use crate::recorder::LinuxMicAudioRecorder;
 use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
 use fs2::FileExt;
 use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber, PythonFunAsrRunner};
-use voice_input_audio::has_voice_activity;
 use voice_input_core::{AppConfig, InputMethodHost, Result, VoiceInputError};
 use crate::live::{print_live_ready, LiveJobHandle, LiveJobState};
 use crate::ibus::{backspace_in_active_window, insert_indicator_and_save_clipboard};
@@ -136,10 +135,12 @@ fn run_recording_cycle(
         silence_stop_timeout,
         Arc::clone(&silence_stop_enabled),
         move |_, samples, _| {
-            if has_voice_activity(&samples) {
-                voice_chunks_for_callback.fetch_add(1, Ordering::SeqCst);
-            }
-        },
+                // 用峰值检测而非 RMS，对抗 AGC 放大带来的高声底噪。
+                // 人声的瞬时峰值通常 > 2000，环境噪声即使经 AGC 也很难到 1000。
+                if samples.iter().any(|s| s.abs() > 1000) {
+                    voice_chunks_for_callback.fetch_add(1, Ordering::SeqCst);
+                }
+            },
     );
 
     // 移除录音提示符
