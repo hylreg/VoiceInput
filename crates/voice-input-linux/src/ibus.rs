@@ -373,17 +373,28 @@ pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
 
 /// 持有剪贴板还原逻辑的守卫，drop 时自动恢复用户剪贴板。
 pub struct ClipboardRestoreGuard {
+    #[allow(dead_code)]
     saved: Option<String>,
 }
 
+#[cfg(feature = "ibus")]
 impl Drop for ClipboardRestoreGuard {
     fn drop(&mut self) {
         if let Some(text) = self.saved.take() {
             if let Ok(mut clipboard) = arboard::Clipboard::new() {
                 let _ = clipboard.set_text(text);
+                // Linux 剪贴板管理器需要时间同步内容，不能立即 drop Clipboard。
+                // arboard 的 Drop 不做持久化，这里短暂持有足够让管理器抓取。
+                thread::sleep(Duration::from_millis(80));
             }
+            // clipboard 在此处 drop
         }
     }
+}
+
+#[cfg(not(feature = "ibus"))]
+impl Drop for ClipboardRestoreGuard {
+    fn drop(&mut self) {}
 }
 
 #[cfg(feature = "ibus")]
