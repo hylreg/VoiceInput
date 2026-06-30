@@ -9,7 +9,7 @@ use crate::{
 pub struct LinuxLiveArgs {
     pub backend: LinuxBackendKind,
     pub activation_hotkey: Option<String>,
-    pub double_ctrl_window_ms: Option<u64>,
+    pub double_press_window_ms: Option<u64>,
     pub silence_stop_ms: Option<u64>,
 }
 
@@ -18,7 +18,7 @@ impl Default for LinuxLiveArgs {
         Self {
             backend: LinuxBackendKind::IBus,
             activation_hotkey: None,
-            double_ctrl_window_ms: None,
+            double_press_window_ms: None,
             silence_stop_ms: None,
         }
     }
@@ -27,8 +27,8 @@ impl Default for LinuxLiveArgs {
 pub fn run_live_with_args(args: LinuxLiveArgs) -> Result<(), String> {
     let persisted_settings = LinuxAppSettings::load();
     let effective_window_ms = args
-        .double_ctrl_window_ms
-        .unwrap_or(persisted_settings.double_ctrl_window_ms);
+        .double_press_window_ms
+        .unwrap_or(persisted_settings.double_press_window_ms);
     let effective_silence_stop_ms = args
         .silence_stop_ms
         .unwrap_or(persisted_settings.silence_stop_timeout_ms)
@@ -37,7 +37,7 @@ pub fn run_live_with_args(args: LinuxLiveArgs) -> Result<(), String> {
     println!("配置文件：{}", settings_path().display());
     println!(
         "已加载双击间隔：{}ms，生效值：{}ms",
-        persisted_settings.double_ctrl_window_ms, effective_window_ms
+        persisted_settings.double_press_window_ms, effective_window_ms
     );
     println!(
         "已加载静音停录：{}ms，生效值：{}ms",
@@ -48,7 +48,7 @@ pub fn run_live_with_args(args: LinuxLiveArgs) -> Result<(), String> {
     }
 
     let settings = LinuxAppSettings {
-        double_ctrl_window_ms: effective_window_ms,
+        double_press_window_ms: effective_window_ms,
         silence_stop_timeout_ms: effective_silence_stop_ms,
     };
     if let Err(err) = settings.save() {
@@ -73,7 +73,7 @@ pub fn run_live_with_args(args: LinuxLiveArgs) -> Result<(), String> {
             service_name: "voice-input".to_string(),
         },
         max_recording_duration: Duration::from_secs(30),
-        double_ctrl_window: Duration::from_millis(effective_window_ms),
+        double_press_window: Duration::from_millis(effective_window_ms),
         silence_stop_timeout: Duration::from_millis(effective_silence_stop_ms),
         ..Default::default()
     };
@@ -104,14 +104,14 @@ pub fn parse_live_args(args: Vec<String>) -> Result<LinuxLiveArgs, String> {
                     .ok_or_else(|| String::from("缺少 --activation-hotkey 的值"))?;
                 parsed.activation_hotkey = Some(value);
             }
-            "--double-ctrl-window-ms" => {
+            "--double-press-window-ms" => {
                 let value = iter
                     .next()
-                    .ok_or_else(|| String::from("缺少 --double-ctrl-window-ms 的值"))?;
-                parsed.double_ctrl_window_ms = Some(
+                    .ok_or_else(|| String::from("缺少 --double-press-window-ms 的值"))?;
+                parsed.double_press_window_ms = Some(
                     value
                         .parse::<u64>()
-                        .map_err(|_| String::from("--double-ctrl-window-ms 必须是整数毫秒"))?,
+                        .map_err(|_| String::from("--double-press-window-ms 必须是整数毫秒"))?,
                 );
             }
             "--silence-stop-ms" => {

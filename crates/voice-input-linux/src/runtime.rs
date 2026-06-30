@@ -21,7 +21,7 @@ pub struct LinuxLiveAppConfig {
     pub host: LinuxHostConfig,
     pub asr: FunAsrConfig,
     pub max_recording_duration: Duration,
-    pub double_ctrl_window: Duration,
+    pub double_press_window: Duration,
     pub silence_stop_timeout: Duration,
     pub show_status_item: bool,
 }
@@ -39,7 +39,7 @@ impl Default for LinuxLiveAppConfig {
             },
             asr: FunAsrConfig::from_env(),
             max_recording_duration: Duration::from_secs(30),
-            double_ctrl_window: Duration::from_millis(300),
+            double_press_window: Duration::from_millis(300),
             silence_stop_timeout: Duration::from_millis(1500),
             show_status_item: true,
         }
@@ -89,12 +89,12 @@ impl SingleInstanceGuard {
     }
 }
 
-fn describe_activation_hotkey(spec: &str, double_ctrl_window: Duration) -> String {
+fn describe_activation_hotkey(spec: &str, double_press_window: Duration) -> String {
     if spec.eq_ignore_ascii_case("doublealt")
         || spec.eq_ignore_ascii_case("double-alt")
         || spec.eq_ignore_ascii_case("double_alt")
     {
-        format!("双击 Alt（严格，{}ms）", double_ctrl_window.as_millis())
+        format!("双击 Alt（严格，{}ms）", double_press_window.as_millis())
     } else if spec.eq_ignore_ascii_case("doublectrl")
         || spec.eq_ignore_ascii_case("double-ctrl")
         || spec.eq_ignore_ascii_case("double_ctrl")
@@ -102,7 +102,7 @@ fn describe_activation_hotkey(spec: &str, double_ctrl_window: Duration) -> Strin
         || spec.eq_ignore_ascii_case("double-ctrl-strict")
         || spec.eq_ignore_ascii_case("double_ctrl_strict")
     {
-        format!("双击 Ctrl（严格，{}ms）", double_ctrl_window.as_millis())
+        format!("双击 Ctrl（严格，{}ms）", double_press_window.as_millis())
     } else {
         spec.to_string()
     }
@@ -238,7 +238,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
         hotkey,
         active_for_watcher,
         recorder_for_watcher,
-        config.double_ctrl_window,
+        config.double_press_window,
     )?;
     let host = LinuxInputMethodHost::new(config.host.clone());
     println!("正在预加载 ASR 模型...");
@@ -259,7 +259,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
     };
 
     let hotkey_label =
-        describe_activation_hotkey(&activation_hotkey, config.double_ctrl_window);
+        describe_activation_hotkey(&activation_hotkey, config.double_press_window);
     let silence_label = format!(
         "静音自动停录：{}ms",
         config.silence_stop_timeout.as_millis()
@@ -274,7 +274,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
         &hotkey_label,
         "双击一次开始录音，再双击一次停止并转写",
         [
-            format!("双击间隔：{}ms", config.double_ctrl_window.as_millis()),
+            format!("双击间隔：{}ms", config.double_press_window.as_millis()),
             silence_label,
         ]
         .into_iter()

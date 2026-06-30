@@ -226,7 +226,7 @@ impl LinuxHotkeyWatcher {
         spec: LinuxHotkeySpec,
         active: Arc<LiveJobState>,
         recorder: crate::recorder::LinuxMicAudioRecorder,
-        double_ctrl_window: Duration,
+        double_press_window: Duration,
     ) -> Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
@@ -256,7 +256,7 @@ impl LinuxHotkeyWatcher {
                         // Alt 刚按下
                         if !in_cooldown {
                             if let Some(release_time) = last_alt_release {
-                                if now.duration_since(release_time) <= double_ctrl_window {
+                                if now.duration_since(release_time) <= double_press_window {
                                     // 两次 Alt 按下间隔在窗口内 → 触发
                                     if active.is_active() {
                                         if recorder.is_recording() {
@@ -292,7 +292,7 @@ impl LinuxHotkeyWatcher {
                         // Ctrl 刚按下
                         if !in_cooldown {
                             if let Some(release_time) = last_ctrl_release {
-                                if now.duration_since(release_time) <= double_ctrl_window {
+                                if now.duration_since(release_time) <= double_press_window {
                                     // 两次 Ctrl 按下间隔在窗口内 → 触发
                                     if active.is_active() {
                                         if recorder.is_recording() {
