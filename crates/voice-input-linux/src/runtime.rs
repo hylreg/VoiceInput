@@ -29,7 +29,7 @@ pub struct LinuxLiveAppConfig {
 impl Default for LinuxLiveAppConfig {
     fn default() -> Self {
         let mut app = AppConfig::default();
-        app.activation_hotkey = "DoubleCtrl".to_string();
+        app.activation_hotkey = "DoubleAlt".to_string();
 
         Self {
             app,
@@ -90,7 +90,12 @@ impl SingleInstanceGuard {
 }
 
 fn describe_activation_hotkey(spec: &str, double_ctrl_window: Duration) -> String {
-    if spec.eq_ignore_ascii_case("doublectrl")
+    if spec.eq_ignore_ascii_case("doublealt")
+        || spec.eq_ignore_ascii_case("double-alt")
+        || spec.eq_ignore_ascii_case("double_alt")
+    {
+        format!("双击 Alt（严格，{}ms）", double_ctrl_window.as_millis())
+    } else if spec.eq_ignore_ascii_case("doublectrl")
         || spec.eq_ignore_ascii_case("double-ctrl")
         || spec.eq_ignore_ascii_case("double_ctrl")
         || spec.eq_ignore_ascii_case("doublectrlstrict")

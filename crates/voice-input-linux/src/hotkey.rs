@@ -12,6 +12,7 @@ use voice_input_core::{Result, VoiceInputError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxHotkeySpec {
     double_ctrl: bool,
+    double_alt: bool,
     key: Keycode,
     control: bool,
     shift: bool,
@@ -23,6 +24,7 @@ impl LinuxHotkeySpec {
     pub fn parse(spec: &str) -> Result<Self> {
         let mut parsed = LinuxHotkeySpec {
             double_ctrl: false,
+            double_alt: false,
             key: Keycode::Space,
             control: false,
             shift: false,
@@ -51,6 +53,14 @@ impl LinuxHotkeySpec {
                 || token.eq_ignore_ascii_case("double_ctrl_strict")
             {
                 parsed.double_ctrl = true;
+                continue;
+            }
+
+            if token.eq_ignore_ascii_case("doublealt")
+                || token.eq_ignore_ascii_case("double-alt")
+                || token.eq_ignore_ascii_case("double_alt")
+            {
+                parsed.double_alt = true;
                 continue;
             }
 
@@ -93,6 +103,9 @@ impl LinuxHotkeySpec {
     pub fn matches(&self, keys: &[Keycode]) -> bool {
         if self.double_ctrl {
             return is_ctrl_only(keys);
+        }
+        if self.double_alt {
+            return is_alt_only(keys);
         }
 
         if !keys.contains(&self.key) {
@@ -195,6 +208,13 @@ fn is_ctrl_only(keys: &[Keycode]) -> bool {
             .all(|key| matches!(key, Keycode::LControl | Keycode::RControl))
 }
 
+fn is_alt_only(keys: &[Keycode]) -> bool {
+    !keys.is_empty()
+        && keys
+            .iter()
+            .all(|key| matches!(key, Keycode::LAlt | Keycode::RAlt))
+}
+
 pub struct LinuxHotkeyWatcher {
     receiver: mpsc::Receiver<()>,
     stop: Arc<AtomicBool>,
@@ -216,14 +236,49 @@ impl LinuxHotkeyWatcher {
             let device = DeviceState::new();
             let mut last_trigger_at: Option<Instant> = None;
             let mut last_ctrl_release: Option<Instant> = None;
+            let mut last_alt_release: Option<Instant> = None;
             let mut ctrl_was_held = false;
+            let mut alt_was_held = false;
             let mut latched = false;
             const TRIGGER_COOLDOWN: Duration = Duration::from_millis(800);
 
             while !stop_for_thread.load(Ordering::SeqCst) {
                 let keys = device.get_keys();
 
-                if spec.double_ctrl {
+                if spec.double_alt {
+                    let alt_held = has_any(&keys, &[Keycode::LAlt, Keycode::RAlt]);
+                    let now = Instant::now();
+                    let in_cooldown = last_trigger_at
+                        .map(|last| now.duration_since(last) <= TRIGGER_COOLDOWN)
+                        .unwrap_or(false);
+
+                    if alt_held && !alt_was_held {
+                        // Alt 刚按下
+                        if !in_cooldown {
+                            if let Some(release_time) = last_alt_release {
+                                if now.duration_since(release_time) <= double_ctrl_window {
+                                    // 两次 Alt 按下间隔在窗口内 → 触发
+                                    if active.is_active() {
+                                        if recorder.is_recording() {
+                                            eprintln!("检测到双击 Alt 停止热键，正在结束录音...");
+                                            recorder.stop();
+                                        }
+                                    } else {
+                                        eprintln!("检测到双击 Alt 开始热键，正在启动录音...");
+                                        let _ = sender.send(());
+                                    }
+                                    last_trigger_at = Some(now);
+                                    last_alt_release = None;
+                                }
+                            }
+                        }
+                    } else if !alt_held && alt_was_held {
+                        // Alt 刚释放
+                        last_alt_release = Some(now);
+                    }
+
+                    alt_was_held = alt_held;
+                } else if spec.double_ctrl {
                     // 使用 has_any 而不是 is_ctrl_only 来检测 Ctrl 状态。
                     // is_ctrl_only 会在 Ctrl+C 后释放 C 时产生虚假的上升沿
                     //（因为 Ctrl 再次变成"单独按下"），导致组合键误触发。
@@ -365,5 +420,16 @@ mod tests {
         assert!(spec.matches(&[Keycode::LControl]));
         assert!(spec.matches(&[Keycode::RControl]));
         assert!(!spec.matches(&[Keycode::Space]));
+    }
+
+    #[test]
+    fn parses_double_alt_hotkey() {
+        let spec = LinuxHotkeySpec::parse("DoubleAlt").expect("parse hotkey");
+        assert!(spec.double_alt);
+        assert!(!spec.double_ctrl);
+        assert!(spec.matches(&[Keycode::LAlt]));
+        assert!(spec.matches(&[Keycode::RAlt]));
+        assert!(!spec.matches(&[Keycode::Space]));
+        assert!(!spec.matches(&[Keycode::LAlt, Keycode::Space]));
     }
 }
