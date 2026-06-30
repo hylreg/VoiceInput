@@ -667,7 +667,7 @@ voiceinput_setup_linux_autostart() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$$REPO_ROOT_PLACEHOLDER$$"
+REPO_ROOT="__REPO_ROOT__"
 cd "$REPO_ROOT"
 
 if [[ -f "$REPO_ROOT/config/voiceinput.env" ]]; then
@@ -677,11 +677,11 @@ if [[ -f "$REPO_ROOT/config/voiceinput.env" ]]; then
   set +a
 fi
 
-exec "$REPO_ROOT/target/release/voice-input-linux" live --backend "$$BACKEND_PLACEHOLDER$$"
+exec "$REPO_ROOT/target/release/voice-input-linux" live --backend "__BACKEND__"
 LAUNCHER
 
-  sed -i "s|\$\$REPO_ROOT_PLACEHOLDER\$\$|$REPO_ROOT|g" "$launcher_path"
-  sed -i "s|\$\$BACKEND_PLACEHOLDER\$\$|$backend|g" "$launcher_path"
+  sed -i "s|__REPO_ROOT__|$REPO_ROOT|g" "$launcher_path"
+  sed -i "s|__BACKEND__|$backend|g" "$launcher_path"
   chmod +x "$launcher_path"
 
   echo "已创建启动脚本：$launcher_path"
