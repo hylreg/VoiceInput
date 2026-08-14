@@ -277,7 +277,6 @@ pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
 }
 
 #[cfg(not(feature = "ibus"))]
-#[allow(dead_code)]
 pub fn insert_text_into_active_window(_text: &str, _window_id: Option<&str>) -> Result<()> {
     Ok(())
 }
@@ -289,7 +288,6 @@ pub fn type_text_in_active_window(_text: &str, _window_id: Option<&str>) -> Resu
 }
 
 #[cfg(not(feature = "ibus"))]
-#[allow(dead_code)]
 pub fn backspace_in_active_window(_count: usize, _window_id: Option<&str>) -> Result<()> {
     Ok(())
 }

@@ -124,3 +124,67 @@ pub fn validate_backend(value: &str) -> Result<(), String> {
         other => Err(format!("不支持的 Linux 后端：{other}（仅支持 ibus）")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_backend_accepts_ibus() {
+        assert!(validate_backend("ibus").is_ok());
+    }
+
+    #[test]
+    fn validate_backend_rejects_fcitx5_with_helpful_error() {
+        let err = validate_backend("fcitx5").expect_err("fcitx5 应当被拒绝");
+        assert!(
+            err.contains("Fcitx5 路径还没有接入原生绑定"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_backend_rejects_fcitx_alias() {
+        let err = validate_backend("fcitx").expect_err("fcitx 应当被拒绝");
+        assert!(
+            err.contains("Fcitx5 路径还没有接入原生绑定"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_backend_rejects_unknown_backend() {
+        let err = validate_backend("bogus").expect_err("bogus 应当被拒绝");
+        assert!(
+            err.contains("不支持的 Linux 后端：bogus"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_live_args_accepts_ibus_backend() {
+        let args = parse_live_args(vec![
+            "voice-input-linux-live".to_string(),
+            "--backend".to_string(),
+            "ibus".to_string(),
+        ])
+        .expect("ibus 后端应当解析成功");
+        assert!(args.activation_hotkey.is_none());
+        assert!(args.double_press_window_ms.is_none());
+        assert!(args.silence_stop_ms.is_none());
+    }
+
+    #[test]
+    fn parse_live_args_rejects_fcitx5_backend() {
+        let err = parse_live_args(vec![
+            "voice-input-linux-live".to_string(),
+            "--backend".to_string(),
+            "fcitx5".to_string(),
+        ])
+        .expect_err("fcitx5 后端应当被拒绝");
+        assert!(
+            err.contains("Fcitx5 路径还没有接入原生绑定"),
+            "unexpected error: {err}"
+        );
+    }
+}

@@ -115,3 +115,64 @@ fn usage() -> String {
     )
     .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_smoke_args_reads_audio_file_path() {
+        let cmd = match parse_smoke_args(vec![
+            "--audio-file".to_string(),
+            "x.wav".to_string(),
+        ]) {
+            Ok(cmd) => cmd,
+            Err(_) => panic!("smoke 参数应当解析成功"),
+        };
+        match cmd {
+            Command::Smoke { audio_file } => assert_eq!(audio_file, PathBuf::from("x.wav")),
+            _ => panic!("expected Smoke command"),
+        }
+    }
+
+    #[test]
+    fn parse_smoke_args_requires_audio_file() {
+        match parse_smoke_args(vec![]) {
+            Err(ParseOutcome::Error(msg)) => {
+                assert!(
+                    msg.contains("缺少必需参数 --audio-file"),
+                    "unexpected error: {msg}"
+                );
+            }
+            _ => panic!("expected Error outcome"),
+        }
+    }
+
+    #[test]
+    fn parse_smoke_args_rejects_unknown_arg() {
+        match parse_smoke_args(vec!["--bogus".to_string()]) {
+            Err(ParseOutcome::Error(msg)) => {
+                assert!(msg.contains("不支持的参数"), "unexpected error: {msg}");
+            }
+            _ => panic!("expected Error outcome"),
+        }
+    }
+
+    #[test]
+    fn parse_smoke_args_rejects_fcitx5_backend() {
+        match parse_smoke_args(vec![
+            "--audio-file".to_string(),
+            "x.wav".to_string(),
+            "--backend".to_string(),
+            "fcitx5".to_string(),
+        ]) {
+            Err(ParseOutcome::Error(msg)) => {
+                assert!(
+                    msg.contains("Fcitx5 路径还没有接入原生绑定"),
+                    "unexpected error: {msg}"
+                );
+            }
+            _ => panic!("expected Error outcome"),
+        }
+    }
+}
