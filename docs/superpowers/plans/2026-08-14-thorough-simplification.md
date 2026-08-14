@@ -3514,3 +3514,5 @@ git commit -m "refactor: 彻底精简收尾——验证通过"
   - **spec 缺陷（计划代码块编译不过）**：Step 1 的 `kind: double_press.unwrap_or(combo)` 类型错误——`double_press` 是 `Option<ModifierKey>`，`unwrap_or` 期望 `Option<HotkeyKind>`。执行时最小修复为 `double_press.map(HotkeyKind::DoublePress).unwrap_or(combo)`（上方代码块已同步修正）；语义：双击 token 优先于组合 token，与旧代码 `matches()` 先查 `double_ctrl`/`double_alt` 的优先级一致。
   - Step 1 代码块另有 2 处 rustfmt 漂移（单字符 match 臂折行、`set_combo_key` if-let），执行时仅对 hotkey.rs 单文件跑 rustfmt（未全仓 fmt，保留 funasr.rs/ibus.rs 历史漂移）。
   - 测试数从 27 降为 25（删除 2 个冗余测试），全绿。
+  - 质量审查追加修复（e31fb69）：(1) `ModifierKey`/`HotkeyKind` 收敛为 `pub(crate)`、`kind()` 为 `pub(crate)`（原计划代码块的 `pub` 在私有模块中构成死表面；完全私有会触发 `private_interfaces` lint，故取 pub(crate)）；(2) `matches()` 补 doc comment 说明 DoublePress 分支严格语义与监听循环 has_any 的有意差异；(3) 补 2 个测试：全部双击别名变体（9 个 Ctrl + 3 个 Alt）与优先级（双击覆盖组合、后者覆盖前者）。
+  - 审查者 Nit 跳过并记录：`set_combo_modifier`/`set_combo_key` 对 DoublePress 静默 no-op 的形状问题（建议 ComboSpec builder，超范围）；`matches()` doc comment「解析校验」措辞无对应调用点，宜改「测试」——后者归入 Task 10 收尾。
