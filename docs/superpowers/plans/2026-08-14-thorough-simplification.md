@@ -2318,6 +2318,7 @@ mod smoke;
 mod tray;
 
 pub use hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
+pub use host::LinuxInputMethodHost;
 pub use live::LiveJobState;
 pub use live_cli::{parse_live_args, run_live_with_args, validate_backend, LinuxLiveArgs};
 pub use recorder::{FileAudioRecorder, LinuxMicAudioRecorder};
@@ -2351,7 +2352,7 @@ fn smoke_transcribes_test_audio_file() {
         ..Default::default()
     };
     let transcriber = LocalFunAsrTranscriber::new(FunAsrConfig::default(), Box::new(runner));
-    let audio_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../testdata/smoke.wav");
+    let audio_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/smoke.wav");
 
     let text = transcribe_file(&audio_path, &transcriber).expect("transcribe file");
     assert_eq!(text, "来自 Linux");
@@ -3500,3 +3501,7 @@ git commit -m "refactor: 彻底精简收尾——验证通过"
   - Step 3 的 ibus.rs 代码块中 `debug_xdotool!`/`debug_timestamp`/`DEBUG_START` 位于文件末尾——Rust `macro_rules!` 必须先于使用，执行时移至文件顶部（内容不变）。
   - Step 3 的 `#[cfg(not(feature = "ibus"))]` 块缺少 `insert_text_into_active_window` 存根，而 host.rs 无条件调用它，无 feature 构建无法编译——执行时补齐与其余两个存根一致的 no-op 存根。
   - 质量审查追加修复（3bfbf96）：`run_smoke` 无 ibus feature 时明确报错（已同步写入 Task 5 Step 7 代码块；Task 6 Step 9 只改 import 与 `transcribe_file`，不触碰 `run_smoke`）；补 `validate_backend`（6 例）与 `parse_smoke_args`（4 例）单测；`host.commit_text` 恢复「Linux 文本提交失败：{err}」错误上下文（已同步写入 Task 5 Step 8 代码块）。
+- **Task 5 执行记录（commit c514f5b，两阶段审查后补记）**：
+  - Step 10 的 lib.rs 代码块遗漏 `pub use host::LinuxInputMethodHost;`——host 模块私有，缺少该行会让 Step 8 要求保留的 `service_name` 字段/访问器产生 dead_code 警告。执行时已补回（上方代码块已同步修正）。
+  - Step 11 的测试路径 `"../testdata/smoke.wav"` 有误（CARGO_MANIFEST_DIR 指向 crates/voice-input-linux，`../testdata` 解析为 crates/testdata，不存在）；实际路径为 `"../../testdata/smoke.wav"`（上方代码块已同步修正）。
+  - 质量审查 Minor（记录待 Task 10 收尾评估）：smoke.rs `transcribe_file` 文档注释「纯函数」措辞宜改（函数有文件 I/O）；host.rs `service_name` 访问器与 core `MockTranscriber` 保留但零调用者（计划要求保留，后续任务评估去留）。
