@@ -469,7 +469,7 @@ EOF
 
   if [[ -n "$smoke_audio_file" ]]; then
     echo "正在运行 Linux smoke"
-    uv run -- cargo run -p voice-input-linux --features ibus -- smoke --audio-file "$smoke_audio_file"
+    voiceinput_linux_smoke_impl --audio-file "$smoke_audio_file"
   fi
 
   echo "一键部署完成"
@@ -740,168 +740,6 @@ voiceinput_remove_linux_autostart() {
   fi
 }
 
-voiceinput_linux_dev_streaming_impl() {
-  local run_prepare=false
-  local restart_server=false
-  local stop_server=false
-  local -a app_args=()
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --prepare)
-        run_prepare=true
-        shift
-        ;;
-      --restart-server)
-        restart_server=true
-        shift
-        ;;
-      --stop-server)
-        stop_server=true
-        shift
-        ;;
-      --help|-h)
-        cat >&2 <<'EOF'
-用法：
-  scripts/voiceinput.sh linux dev-streaming [--prepare] [--restart-server] [--stop-server] [-- 传给 Linux 常驻应用的参数...]
-EOF
-        exit 0
-        ;;
-      --)
-        shift
-        app_args+=("$@")
-        break
-        ;;
-      *)
-        app_args+=("$1")
-        shift
-        ;;
-    esac
-  done
-
-  has_app_arg() {
-    local needle="$1"
-    local arg
-    for arg in "${app_args[@]}"; do
-      if [[ "$arg" == "$needle" ]]; then
-        return 0
-      fi
-    done
-    return 1
-  }
-
-  if ! has_app_arg "--double-ctrl-window-ms"; then
-    app_args=("--double-ctrl-window-ms" "300" "${app_args[@]}")
-  fi
-
-  local socket_path="${VOICEINPUT_FUNASR_SOCKET_PATH:-/tmp/voiceinput-funasr.sock}"
-  local server_pid_file="${VOICEINPUT_FUNASR_PID_FILE:-/tmp/voiceinput-funasr.pid}"
-  local server_log="${VOICEINPUT_FUNASR_LOG_FILE:-/tmp/voiceinput-funasr.log}"
-
-  socket_is_alive() {
-    local target_socket="$1"
-    python3 - "$target_socket" <<'PY'
-import socket
-import sys
-
-path = sys.argv[1]
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.settimeout(0.2)
-try:
-    sock.connect(path)
-except OSError:
-    raise SystemExit(1)
-finally:
-    sock.close()
-raise SystemExit(0)
-PY
-  }
-
-  cd "$REPO_ROOT"
-  voiceinput_ensure_uv
-  voiceinput_refresh_cargo_path
-
-  if [[ "$run_prepare" == true ]]; then
-    voiceinput_bootstrap_impl --skip-existing
-  fi
-
-  if [[ ! -f ".venv/bin/python" ]]; then
-    echo "未找到 .venv。请先运行 scripts/voiceinput.sh bootstrap 或 scripts/voiceinput.sh linux dev-streaming --prepare" >&2
-    exit 2
-  fi
-
-  local server_running=false
-  if [[ -S "$socket_path" ]] && socket_is_alive "$socket_path"; then
-    server_running=true
-  elif [[ -S "$socket_path" ]]; then
-    rm -f "$socket_path"
-  fi
-
-  if [[ "$stop_server" == true ]]; then
-    if [[ -f "$server_pid_file" ]]; then
-      local server_pid
-      server_pid="$(cat "$server_pid_file" 2>/dev/null || true)"
-      if [[ -n "${server_pid:-}" ]] && kill -0 "$server_pid" >/dev/null 2>&1; then
-        echo "正在停止 FunASR 开发服务：$server_pid"
-        kill "$server_pid" >/dev/null 2>&1 || true
-      fi
-    fi
-    rm -f "$server_pid_file" "$socket_path"
-    echo "FunASR 开发服务已停止"
-    exit 0
-  fi
-
-  if [[ "$restart_server" == true ]]; then
-    if [[ -f "$server_pid_file" ]]; then
-      local server_pid
-      server_pid="$(cat "$server_pid_file" 2>/dev/null || true)"
-      if [[ -n "${server_pid:-}" ]] && kill -0 "$server_pid" >/dev/null 2>&1; then
-        echo "正在重启 FunASR 开发服务：$server_pid"
-        kill "$server_pid" >/dev/null 2>&1 || true
-      fi
-    fi
-    rm -f "$server_pid_file" "$socket_path"
-    server_running=false
-  fi
-
-  if [[ "$server_running" == false ]]; then
-    echo "正在启动常驻 FunASR 开发服务"
-    nohup uv run -- python scripts/funasr_stream_server.py \
-      --socket-path "$socket_path" \
-      --model-dir "./models/FunAudioLLM/Fun-ASR-Nano-2512" \
-      >"$server_log" 2>&1 &
-    local server_pid
-    server_pid=$!
-    echo "$server_pid" >"$server_pid_file"
-
-    for _ in $(seq 1 300); do
-      if [[ -S "$socket_path" ]]; then
-        break
-      fi
-      if ! kill -0 "$server_pid" >/dev/null 2>&1; then
-        echo "FunASR 开发服务启动失败，日志如下：" >&2
-        cat "$server_log" >&2 || true
-        rm -f "$server_pid_file"
-        exit 1
-      fi
-      sleep 1
-    done
-
-    if [[ ! -S "$socket_path" ]]; then
-      echo "等待 FunASR 开发服务就绪超时，日志如下：" >&2
-      cat "$server_log" >&2 || true
-      rm -f "$server_pid_file"
-      exit 1
-    fi
-  else
-    echo "复用已有 FunASR 开发服务：$socket_path"
-  fi
-
-  echo "FunASR 开发服务已就绪：$socket_path"
-  VOICEINPUT_FUNASR_SOCKET="$socket_path" \
-    voiceinput_run_cli_linux live "${app_args[@]}"
-}
-
 usage() {
   cat >&2 <<'EOF'
 用法：
@@ -915,8 +753,6 @@ usage() {
   linux install          安装并启动 Linux 常驻版
   linux uninstall        移除 Linux 常驻版及开机自启
   linux smoke            运行 Linux smoke
-  linux dev              启动 Linux 开发常驻服务
-  linux dev-streaming    启动 Linux FunASR 流式开发服务
 
 说明：
   - 所有子命令都会继续兼容现有脚本参数
@@ -960,12 +796,6 @@ case "$cmd" in
     ;;
   linux-smoke)
     voiceinput_linux_smoke_impl "$@"
-    ;;
-  linux-dev)
-    voiceinput_linux_dev_streaming_impl "$@"
-    ;;
-  linux-dev-streaming)
-    voiceinput_linux_dev_streaming_impl "$@"
     ;;
   *)
     echo "不支持的命令：$cmd" >&2
