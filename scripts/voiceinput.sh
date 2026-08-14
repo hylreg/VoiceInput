@@ -175,8 +175,6 @@ voiceinput_run_platform_live() {
 voiceinput_ensure_linux_dev_deps() {
   local -a required_packages=(
     pkg-config
-    libdbus-1-dev
-    libibus-1.0-dev
     libx11-dev
     libasound2-dev
     portaudio19-dev
@@ -512,7 +510,7 @@ voiceinput_linux_smoke_impl() {
       --help|-h)
         cat >&2 <<'EOF'
 用法：
-  scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav [--model funasr|qwen|qwen-0.6b] [--backend ibus|fcitx5]
+  scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav [--model funasr|qwen|qwen-0.6b] [--backend ibus]
 
 说明：
   - 默认使用 IBus
@@ -530,7 +528,7 @@ EOF
   done
 
   if [[ -z "$audio_file" ]]; then
-    echo "用法：scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav [--model funasr|qwen|qwen-0.6b] [--backend ibus|fcitx5]" >&2
+    echo "用法：scripts/voiceinput.sh linux smoke --audio-file /path/to/audio.wav [--model funasr|qwen|qwen-0.6b] [--backend ibus]" >&2
     exit 2
   fi
 
@@ -593,11 +591,11 @@ voiceinput_linux_install_impl() {
       --help|-h)
         cat >&2 <<'EOF'
 用法：
-  scripts/voiceinput.sh linux install [--backend ibus|fcitx5] [--model funasr|qwen|qwen-0.6b] [--audio-file /path/to/audio.wav]
+  scripts/voiceinput.sh linux install [--backend ibus] [--model funasr|qwen|qwen-0.6b] [--audio-file /path/to/audio.wav]
 
 说明：
   - 默认先执行 Linux bootstrap，准备 Python 环境并下载模型
-  - 会自动安装 Ubuntu 20.04 常用的 Linux 编译依赖，如 pkg-config、libdbus-1-dev、libibus-1.0-dev
+  - 会自动安装 Ubuntu 20.04 常用的 Linux 编译依赖，如 pkg-config、libx11-dev、libasound2-dev、portaudio19-dev
   - 然后自动启动 Linux 常驻托盘版
   - 默认会设置 systemd 开机自启，可使用 --no-autostart 跳过
   - 如果传入 --audio-file，会在准备完成后自动跑一次 Linux smoke

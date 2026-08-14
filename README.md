@@ -26,7 +26,7 @@ scripts/voiceinput.sh linux install --no-launch
 scripts/voiceinput.sh linux install --audio-file testdata/smoke.wav
 ```
 
-系统依赖（Ubuntu 20.04）：`build-essential`、`python3`、`python3-venv`、`python3-pip`，以及 ASR 所需的 Python ≥ 3.12（20.04 默认 3.8，需手动安装 `python3.12`）。`pkg-config`、`libdbus-1-dev`、`libibus-1.0-dev`、`libx11-dev`、`libasound2-dev`、`portaudio19-dev` 六个编译库由安装脚本自动补齐。
+系统依赖（Ubuntu 20.04）：`build-essential`、`python3`、`python3-venv`、`python3-pip`，以及 ASR 所需的 Python ≥ 3.12（20.04 默认 3.8，需手动安装 `python3.12`）。`pkg-config`、`libx11-dev`、`libasound2-dev`、`portaudio19-dev` 四个编译库由安装脚本自动补齐。
 
 默认热键：**双击 Alt**（可配 `--activation-hotkey DoubleCtrl`）。
 
