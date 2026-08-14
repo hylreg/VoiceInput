@@ -11,6 +11,7 @@ use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
 use fs2::FileExt;
 use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber, PythonFunAsrRunner};
 use voice_input_core::{AppConfig, InputMethodHost, Result, VoiceInputError};
+use voice_input_audio::{has_peak_above, write_pcm_wav};
 use crate::live::{print_live_ready, LiveJobState};
 use crate::ibus::{backspace_in_active_window, insert_indicator_and_save_clipboard};
 
@@ -109,25 +110,6 @@ fn build_linux_asr(config: &FunAsrConfig) -> Result<Box<dyn FunAsrRunner>> {
     Ok(Box::new(runner))
 }
 
-/// 从 WAV 字节中扫描 "data" chunk，解析 PCM i16 检查峰值。
-/// 峰值 > 800（约满量程 2.4%）认为有有效语音。
-fn wav_has_voice_activity(wav: &[u8]) -> bool {
-    // 扫描 "data" RIFF chunk：在 WAV 头中查找 b"data" 标记
-    let offset = match wav.windows(4).position(|w| w == b"data") {
-        Some(pos) => pos + 8, // "data" (4) + chunk size (4)
-        None => return false,
-    };
-
-    // chunk size 后面紧跟着 PCM i16 little-endian 采样数据
-    wav.get(offset..)
-        .map(|data| {
-            data.chunks_exact(2)
-                .map(|c| i16::from_le_bytes([c[0], c[1]]))
-                .any(|s| s.abs() > 800)
-        })
-        .unwrap_or(false)
-}
-
 fn run_recording_cycle(
     recorder: &LinuxMicAudioRecorder,
     host: &LinuxInputMethodHost,
@@ -168,21 +150,19 @@ fn run_recording_cycle(
     }
 
     match audio {
-        Ok(audio_data) => {
-            // 从 WAV 中扫描 "data" chunk 起点，正确跳过 RIFF/WAVE/fmt 头。
-            // 之前硬编码 44 字节偏移导致 WAV 头被误当音频数据，
-            // RIFF 标识符的字节值转成 i16 远超阈值，任何录音都被判有语音。
-            let has_voice = wav_has_voice_activity(&audio_data);
-
-            if !has_voice {
+        Ok(audio) => {
+            // 峰值 > 800（约满量程 2.4%）认为有有效语音，
+            // 对抗 AGC 底噪，避免对噪声幻觉转写。
+            if !has_peak_above(&audio.samples, 800) {
                 eprintln!("录音中未检测到有效语音，跳过转写");
                 let _ = host.cancel_composition();
                 let _ = host.end_composition();
                 return Ok(false);
             }
 
+            let wav = write_pcm_wav(&audio.samples, audio.sample_rate)?;
             let transcript = transcriber
-                .transcribe_allow_empty(&audio_data)?
+                .transcribe_allow_empty(&wav)?
                 .trim()
                 .to_string();
 

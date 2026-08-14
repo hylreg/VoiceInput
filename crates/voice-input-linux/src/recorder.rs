@@ -4,9 +4,9 @@ use std::time::{Duration, Instant};
 
 pub use voice_input_audio::FileAudioRecorder;
 use voice_input_audio::{
-    has_voice_activity, push_mono_i16_f32, push_mono_i16_i16, push_mono_i16_u16, write_pcm_wav,
+    has_voice_activity, push_mono_i16_f32, push_mono_i16_i16, push_mono_i16_u16,
 };
-use voice_input_core::{AudioRecorder, Result, VoiceInputError};
+use voice_input_core::{AudioRecorder, RecordedAudio, Result, VoiceInputError};
 
 #[derive(Debug, Clone)]
 pub struct LinuxMicAudioRecorder {
@@ -60,7 +60,7 @@ impl LinuxMicAudioRecorder {
         silence_stop_timeout: Duration,
         silence_stop_enabled: Arc<AtomicBool>,
         mut on_snapshot: F,
-    ) -> Result<Vec<u8>>
+    ) -> Result<RecordedAudio>
     where
         F: FnMut(u32, Vec<i16>, bool),
     {
@@ -230,12 +230,15 @@ impl LinuxMicAudioRecorder {
             duration_secs
         );
 
-        write_pcm_wav(&captured, sample_rate)
+        Ok(RecordedAudio {
+            samples: captured,
+            sample_rate,
+        })
     }
 }
 
 impl AudioRecorder for LinuxMicAudioRecorder {
-    fn record_once(&self) -> Result<Vec<u8>> {
+    fn record_once(&self) -> Result<RecordedAudio> {
         self.record_once_with_chunks(
             Duration::from_millis(0),
             Duration::from_millis(0),

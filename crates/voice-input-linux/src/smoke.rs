@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use voice_input_asr::{FunAsrConfig, LocalFunAsrTranscriber, PythonFunAsrRunner};
+use voice_input_audio::write_pcm_wav;
 use voice_input_core::{AudioRecorder, InputMethodHost, Transcriber};
 
 use crate::host::LinuxInputMethodHost;
@@ -12,7 +13,8 @@ pub fn transcribe_file(
     transcriber: &LocalFunAsrTranscriber,
 ) -> voice_input_core::Result<String> {
     let audio = FileAudioRecorder::new(audio_path).record_once()?;
-    transcriber.transcribe(&audio)
+    let wav = write_pcm_wav(&audio.samples, audio.sample_rate)?;
+    transcriber.transcribe(&wav)
 }
 
 pub fn run_smoke(audio_path: PathBuf) -> Result<(), String> {

@@ -1,7 +1,8 @@
+use crate::audio::RecordedAudio;
 use crate::error::Result;
 
 pub trait AudioRecorder {
-    fn record_once(&self) -> Result<Vec<u8>>;
+    fn record_once(&self) -> Result<RecordedAudio>;
 }
 
 pub trait Transcriber {
