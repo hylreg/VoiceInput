@@ -2,6 +2,8 @@
 
 日期：2026-06-29
 
+> **历史文档**：本设计已被 [2026-08-14 彻底精简方案](2026-08-14-thorough-simplification-design.md) 部分取代——`linux dev`/`linux dev-streaming` 子命令、流式管线、部分抽象层已在精简中删除。本文保留原貌，仅作历史记录；当前架构以 README.md 为准。
+
 ## 目标
 
 移除 macOS 和 Windows 平台支持，将项目精简为纯 Linux 语音输入法。删除 `voice-input-runtime` 和 `voice-input-cli` crate，将其逻辑合并到 `voice-input-linux` 中，使 `voice-input-linux` 成为唯一的二进制目标 crate。
