@@ -16,7 +16,10 @@
 - `AppConfig` 只保留 `activation_hotkey` 字段
 - 删除 `AppController` + `controller.rs` 整个文件（双流水线合并后 smoke 不再走控制器）
 - 删除 `HotkeyManager` trait + `MockHotkeyManager`
-- 保留 `AudioRecorder`、`Transcriber`、`InputMethodHost` trait、`Transcript`、`VoiceInputError` 及 `MockAudioRecorder`、`MockInputMethodHost`、`MockTranscriber`
+- 保留 `AudioRecorder`、`Transcriber`、`InputMethodHost` trait、`VoiceInputError`、`MockTranscriber`
+- 删除 `Transcript` 类型（`partials` 无消费者，live 从不更新预编辑）：`Transcriber::transcribe` 直接返回 `Result<String>`
+- 删除 `MockAudioRecorder`、`MockInputMethodHost`（控制器删除后无消费者）
+- `InputMethodHost` trait 删除 `update_preedit`、`show_recording_indicator`、`clear_recording_indicator`（零消费者），只剩 start/commit/cancel/end 四个方法
 - 新增 `RecordedAudio { samples: Vec<i16>, sample_rate: u32 }`，`AudioRecorder::record_once` 改返回它（统一 PCM 形态，消除 WAV 头扫描）
 
 ### voice-input-audio：统一音频形态
@@ -56,7 +59,7 @@
 ## 测试策略
 
 - 删除：`core/tests/controller.rs`（控制器没了）、`session.rs` 中测转发层的测试（转发层没了）
-- 保留适配：hotkey 解析测试、live 状态测试、funasr worker 协议测试、asr 配置测试（catalog 嵌入后断言不变）
+- 保留适配：hotkey 解析测试、live 状态测试、funasr worker 协议测试、asr 配置测试（catalog 嵌入后断言不变，`Transcript` 断言改为 `String`）
 - smoke 拆出可测的 `transcribe_file` 纯函数（host 提交部分不做单测）
 
 ## 验证
