@@ -3505,3 +3505,8 @@ git commit -m "refactor: 彻底精简收尾——验证通过"
   - Step 10 的 lib.rs 代码块遗漏 `pub use host::LinuxInputMethodHost;`——host 模块私有，缺少该行会让 Step 8 要求保留的 `service_name` 字段/访问器产生 dead_code 警告。执行时已补回（上方代码块已同步修正）。
   - Step 11 的测试路径 `"../testdata/smoke.wav"` 有误（CARGO_MANIFEST_DIR 指向 crates/voice-input-linux，`../testdata` 解析为 crates/testdata，不存在）；实际路径为 `"../../testdata/smoke.wav"`（上方代码块已同步修正）。
   - 质量审查 Minor（记录待 Task 10 收尾评估）：smoke.rs `transcribe_file` 文档注释「纯函数」措辞宜改（函数有文件 I/O）；host.rs `service_name` 访问器与 core `MockTranscriber` 保留但零调用者（计划要求保留，后续任务评估去留）。
+- **Task 6 执行记录（commit c55c208 + 8ebb210，两阶段审查后补记）**：
+  - 无 spec 缺陷；Step 4/5 代码块与磁盘逐字匹配，一次通过规范审查。
+  - 质量审查追加修复（8ebb210）：(1) file.rs 测试块 rustfmt 折行（仓库存在历史 fmt 漂移，仅局部修正本任务新代码，未全仓跑 cargo fmt）；(2) 测试临时 WAV 加 `TempFileGuard` Drop guard，`record_once().expect` panic 时不泄漏 /tmp 文件；(3) `has_peak_above` 改用 `unsigned_abs() > threshold as u16`，修复 `i16::MIN` 采样在 debug 构建 panic / release 构建误判静音的边界缺陷（负阈值经 `as u16` 回绕的语义与旧代码 `abs() > 负值` 恒真一致，实际唯一调用点传 800，无影响）。
+  - 审查者建议跳过并记录（不阻塞）：`average_to_mono` 与 pcm.rs `push_mono_i16_i16` 的 downmix 数学重复（超出本任务文件清单，未抽公共 helper）；runtime.rs `write_pcm_wav(...)?` 使编码错误从日志记录改为向上传播（Cursor 写入不可失败，理论性）。
+  - 审查者可选 Nit 未修（其标注「不需要再修」）：file.rs 测试末尾 `std::fs::remove_file(&path).ok()` 与 guard 的 Drop 重复，可直接删该行；`has_peak_above` 未补 i16::MIN 回归测试（可加 `assert!(has_peak_above(&[i16::MIN], 800))`）。
