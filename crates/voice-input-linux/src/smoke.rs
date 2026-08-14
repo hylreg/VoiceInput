@@ -30,7 +30,7 @@ pub fn run_smoke(audio_path: PathBuf) -> Result<(), String> {
     let text = transcribe_file(&audio_path, &transcriber)
         .map_err(|err| format!("Linux smoke 管线失败：{err}"))?;
 
-    let host = LinuxInputMethodHost::new("voice-input");
+    let host = LinuxInputMethodHost::new();
     host.start_composition()
         .map_err(|err| format!("开始输入失败：{err}"))?;
     host.commit_text(&text)

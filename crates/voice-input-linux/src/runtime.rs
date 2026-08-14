@@ -86,25 +86,6 @@ impl SingleInstanceGuard {
     }
 }
 
-fn describe_activation_hotkey(spec: &str, double_press_window: Duration) -> String {
-    if spec.eq_ignore_ascii_case("doublealt")
-        || spec.eq_ignore_ascii_case("double-alt")
-        || spec.eq_ignore_ascii_case("double_alt")
-    {
-        format!("双击 Alt（严格，{}ms）", double_press_window.as_millis())
-    } else if spec.eq_ignore_ascii_case("doublectrl")
-        || spec.eq_ignore_ascii_case("double-ctrl")
-        || spec.eq_ignore_ascii_case("double_ctrl")
-        || spec.eq_ignore_ascii_case("doublectrlstrict")
-        || spec.eq_ignore_ascii_case("double-ctrl-strict")
-        || spec.eq_ignore_ascii_case("double_ctrl_strict")
-    {
-        format!("双击 Ctrl（严格，{}ms）", double_press_window.as_millis())
-    } else {
-        spec.to_string()
-    }
-}
-
 fn build_linux_asr(config: &FunAsrConfig) -> Result<Box<dyn FunAsrRunner>> {
     let runner = PythonFunAsrRunner::connect(config.clone())?;
     Ok(Box::new(runner))
@@ -215,7 +196,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
         recorder_for_watcher,
         config.double_press_window,
     )?;
-    let host = LinuxInputMethodHost::new(config.service_name.clone());
+    let host = LinuxInputMethodHost::new();
     println!("正在预加载 ASR 模型...");
     let asr_runner = build_linux_asr(&config.asr)?;
     let transcriber = LocalFunAsrTranscriber::new(config.asr.clone(), asr_runner);
@@ -233,8 +214,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
         None
     };
 
-    let hotkey_label =
-        describe_activation_hotkey(&activation_hotkey, config.double_press_window);
+    let hotkey_label = hotkey.describe(&activation_hotkey, config.double_press_window);
     let silence_label = format!(
         "静音自动停录：{}ms",
         config.silence_stop_timeout.as_millis()

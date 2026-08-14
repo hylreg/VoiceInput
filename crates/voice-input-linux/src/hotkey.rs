@@ -115,6 +115,19 @@ impl LinuxHotkeySpec {
         self.kind
     }
 
+    /// 生成启动横幅展示用的热键描述文本。DoublePress 走统一标签
+    /// （所有别名显示一致），Combo 回退为原始字符串。
+    pub(crate) fn describe(&self, raw: &str, double_press_window: Duration) -> String {
+        match self.kind {
+            HotkeyKind::DoublePress(modifier) => format!(
+                "双击 {}（严格，{}ms）",
+                modifier.label(),
+                double_press_window.as_millis()
+            ),
+            HotkeyKind::Combo { .. } => raw.to_string(),
+        }
+    }
+
     /// 判断当前按下的按键集合是否满足热键。
     ///
     /// DoublePress 分支使用严格的 is_ctrl_only / is_alt_only 语义（仅修饰键
@@ -486,5 +499,20 @@ mod tests {
         // 退化输入：两个双击 token 时后者覆盖前者
         let spec = LinuxHotkeySpec::parse("DoubleAlt+DoubleCtrl").expect("parse");
         assert_eq!(spec.kind(), HotkeyKind::DoublePress(ModifierKey::Ctrl));
+    }
+
+    #[test]
+    fn describe_labels_double_press_aliases_uniformly() {
+        let window = Duration::from_millis(300);
+        for alias in ["LongCtrl", "long-ctrl", "long_ctrl", "DoubleCtrlStrict"] {
+            let spec = LinuxHotkeySpec::parse(alias).expect("parse alias");
+            assert_eq!(
+                spec.describe(alias, window),
+                "双击 Ctrl（严格，300ms）",
+                "alias: {alias}"
+            );
+        }
+        let spec = LinuxHotkeySpec::parse("DoubleAlt").expect("parse");
+        assert_eq!(spec.describe("DoubleAlt", window), "双击 Alt（严格，300ms）");
     }
 }

@@ -6,6 +6,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use voice_input_core::Result;
+#[cfg(not(feature = "ibus"))]
+use voice_input_core::VoiceInputError;
 #[cfg(feature = "ibus")]
 use voice_input_core::VoiceInputError;
 
@@ -278,7 +280,9 @@ pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
 
 #[cfg(not(feature = "ibus"))]
 pub fn insert_text_into_active_window(_text: &str, _window_id: Option<&str>) -> Result<()> {
-    Ok(())
+    Err(VoiceInputError::Injection(
+        "当前构建未启用 IBus 支持，请使用 --features ibus 重新构建".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "ibus"))]
