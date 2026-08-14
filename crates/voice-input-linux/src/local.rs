@@ -93,26 +93,6 @@ impl LinuxLocalVoiceInput {
     }
 }
 
-pub fn parse_required_audio_file_arg(args: Vec<String>) -> Result<PathBuf, String> {
-    let mut iter = args.into_iter();
-    let _bin = iter.next();
-
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--audio-file" => {
-                let value = iter
-                    .next()
-                    .ok_or_else(|| String::from("缺少 --audio-file 的值"))?;
-                return Ok(PathBuf::from(value));
-            }
-            "--help" | "-h" => return Err(String::from("help")),
-            other => return Err(format!("不支持的参数：{other}")),
-        }
-    }
-
-    Err(String::from("缺少必需参数 --audio-file"))
-}
-
 pub fn parse_audio_file_with_optional_backend_arg<T, F>(
     args: Vec<String>,
     default_backend: T,

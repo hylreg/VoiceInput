@@ -62,13 +62,6 @@ mod linux_tray {
             });
         }
 
-        pub fn request_quit(&self) {
-            self.quit_requested.store(true, Ordering::SeqCst);
-            let _ = self.handle.update(|tray| {
-                tray.quit_requested.store(true, Ordering::SeqCst);
-            });
-        }
-
         pub fn is_quit_requested(&self) -> bool {
             self.quit_requested.load(Ordering::SeqCst)
         }

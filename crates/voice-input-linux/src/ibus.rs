@@ -328,35 +328,6 @@ pub fn debug_timestamp() -> String {
 static DEBUG_START: std::sync::LazyLock<Instant> =
     std::sync::LazyLock::new(Instant::now);
 
-#[cfg(feature = "ibus")]
-#[allow(dead_code)]
-pub fn capture_active_window() -> Result<Option<String>> {
-    if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
-        let now = debug_timestamp();
-        eprintln!("[VOICEINPUT_DEBUG {now}] xdotool getwindowfocus");
-    }
-
-    let output = Command::new("xdotool")
-        .arg("getwindowfocus")
-        .output()
-        .map_err(|e| VoiceInputError::Injection(format!("调用 xdotool 失败：{e}")))?;
-
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let window_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if window_id.is_empty() {
-        Ok(None)
-    } else {
-        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
-            let now = debug_timestamp();
-            eprintln!("[VOICEINPUT_DEBUG {now}] capture_active_window ← win={window_id}");
-        }
-        Ok(Some(window_id))
-    }
-}
-
 /// 在光标处插入录音指示符 ●，同时保存当前剪贴板。
 /// 返回的 guard 持有 Clipboard 对象，确保还原后剪贴板内容
 /// 存活到整个录音周期结束，不被剪贴板管理器丢弃。
@@ -381,7 +352,6 @@ pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
 
     Ok(ClipboardRestoreGuard {
         _clipboard: clipboard,
-        saved,
     })
 }
 
@@ -391,16 +361,6 @@ pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
 pub struct ClipboardRestoreGuard {
     #[allow(dead_code)]
     _clipboard: Option<arboard::Clipboard>,
-    #[allow(dead_code)]
-    saved: Option<String>,
-}
-
-impl Drop for ClipboardRestoreGuard {
-    fn drop(&mut self) {
-        // _clipboard 在此处 drop，录音周期结束。
-        // 由于 Clipboard 已经持有了足够长时间（通常数秒），
-        // 剪贴板管理器有充足时间同步还原后的内容。
-    }
 }
 
 #[cfg(feature = "ibus")]
@@ -491,7 +451,7 @@ pub fn insert_text_into_active_window(text: &str, window_id: Option<&str>) -> Re
 
 #[cfg(feature = "ibus")]
 pub fn type_text_in_active_window(text: &str, window_id: Option<&str>) -> Result<()> {
-    // 调用方已确保窗口是活动窗口（如录音周期开始时的 capture_active_window），
+    // 调用方已确保窗口是活动窗口，
     // 不要在此处调用 focus_window——xdotool windowfocus --sync 会抢占焦点，
     // 导致目标应用光标闪烁或消失。
 
@@ -596,17 +556,8 @@ pub fn backspace_in_active_window(count: usize, window_id: Option<&str>) -> Resu
 }
 
 #[cfg(not(feature = "ibus"))]
-#[allow(dead_code)]
-pub fn capture_active_window() -> Result<Option<String>> {
-    Ok(None)
-}
-
-#[cfg(not(feature = "ibus"))]
 pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
-    Ok(ClipboardRestoreGuard {
-        _clipboard: None,
-        saved: None,
-    })
+    Ok(ClipboardRestoreGuard { _clipboard: None })
 }
 
 #[cfg(not(feature = "ibus"))]

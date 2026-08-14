@@ -132,12 +132,6 @@ pub fn parse_live_args(args: Vec<String>) -> Result<LinuxLiveArgs, String> {
     Ok(parsed)
 }
 
-pub fn print_live_usage() {
-    eprintln!(
-        "用法：cargo run -p voice-input-linux --bin voice-input-linux-app -- --backend ibus [--activation-hotkey DoubleCtrl] [--double-ctrl-window-ms 300] [--silence-stop-ms 1500]"
-    );
-}
-
 fn parse_backend(value: &str) -> Result<LinuxBackendKind, String> {
     match value.to_ascii_lowercase().as_str() {
         "ibus" => Ok(LinuxBackendKind::IBus),

@@ -18,11 +18,10 @@ pub use ibus::{
     IbusBackend, IbusEngineEvent, IbusEngineSpec, MockIbusBridge,
 };
 pub use live::{LiveJobHandle, LiveJobState};
-pub use live_cli::{parse_live_args, print_live_usage, run_live_with_args, LinuxLiveArgs};
+pub use live_cli::{parse_live_args, run_live_with_args, LinuxLiveArgs};
 pub use local::{
     build_local_python_runtime_config, LinuxLocalVoiceInput, LinuxLocalVoiceInputConfig,
     LocalVoiceInputConfig, parse_audio_file_with_optional_backend_arg,
-    parse_required_audio_file_arg,
 };
 pub use recorder::{FileAudioRecorder, LinuxMicAudioRecorder};
 pub use runtime::{run_live_app, LinuxLiveAppConfig};
