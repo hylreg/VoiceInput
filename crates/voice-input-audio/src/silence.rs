@@ -20,7 +20,7 @@ pub fn has_voice_activity(samples: &[i16]) -> bool {
 /// 与 has_voice_activity 的 RMS 语义不同——峰值对单个尖峰更敏感，
 /// 用于整段录音的最终语音判定（对抗 AGC 底噪）。
 pub fn has_peak_above(samples: &[i16], threshold: i16) -> bool {
-    samples.iter().any(|s| s.abs() > threshold)
+    samples.iter().any(|s| s.unsigned_abs() > threshold as u16)
 }
 
 #[cfg(test)]

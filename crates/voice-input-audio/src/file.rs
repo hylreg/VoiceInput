@@ -63,18 +63,27 @@ impl AudioRecorder for FileAudioRecorder {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::FileAudioRecorder;
     use crate::wav::write_pcm_wav;
     use voice_input_core::AudioRecorder;
 
+    struct TempFileGuard(PathBuf);
+
+    impl Drop for TempFileGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     #[test]
     fn decodes_pcm_wav_back_to_mono_samples() {
         let wav = write_pcm_wav(&[100, -100, 300], 16000).expect("write wav");
-        let path = std::env::temp_dir().join(format!(
-            "voiceinput-test-{}-decode.wav",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("voiceinput-test-{}-decode.wav", std::process::id()));
         std::fs::write(&path, &wav).expect("write temp wav");
+        let _guard = TempFileGuard(path.clone());
 
         let recorder = FileAudioRecorder::new(&path);
         let audio = recorder.record_once().expect("decode wav");
