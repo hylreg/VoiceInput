@@ -9,22 +9,49 @@ use crate::live::LiveJobState;
 use device_query::{DeviceQuery, DeviceState, Keycode};
 use voice_input_core::{Result, VoiceInputError};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModifierKey {
+    Ctrl,
+    Alt,
+}
+
+impl ModifierKey {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ctrl => "Ctrl",
+            Self::Alt => "Alt",
+        }
+    }
+
+    fn is_held(self, keys: &[Keycode]) -> bool {
+        match self {
+            Self::Ctrl => has_any(keys, &[Keycode::LControl, Keycode::RControl]),
+            Self::Alt => has_any(keys, &[Keycode::LAlt, Keycode::RAlt]),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyKind {
+    DoublePress(ModifierKey),
+    Combo {
+        key: Keycode,
+        control: bool,
+        shift: bool,
+        alt: bool,
+        meta: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinuxHotkeySpec {
-    double_ctrl: bool,
-    double_alt: bool,
-    key: Keycode,
-    control: bool,
-    shift: bool,
-    alt: bool,
-    meta: bool,
+    kind: HotkeyKind,
 }
 
 impl LinuxHotkeySpec {
     pub fn parse(spec: &str) -> Result<Self> {
-        let mut parsed = LinuxHotkeySpec {
-            double_ctrl: false,
-            double_alt: false,
+        let mut double_press: Option<ModifierKey> = None;
+        let mut combo = HotkeyKind::Combo {
             key: Keycode::Space,
             control: false,
             shift: false,
@@ -37,58 +64,40 @@ impl LinuxHotkeySpec {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
         {
-            if token.eq_ignore_ascii_case("longctrl")
-                || token.eq_ignore_ascii_case("long-ctrl")
-                || token.eq_ignore_ascii_case("long_ctrl")
-            {
-                parsed.double_ctrl = true;
-                continue;
-            }
-
-            if token.eq_ignore_ascii_case("doublectrl")
-                || token.eq_ignore_ascii_case("double-ctrl")
-                || token.eq_ignore_ascii_case("double_ctrl")
-                || token.eq_ignore_ascii_case("doublectrlstrict")
-                || token.eq_ignore_ascii_case("double-ctrl-strict")
-                || token.eq_ignore_ascii_case("double_ctrl_strict")
-            {
-                parsed.double_ctrl = true;
-                continue;
-            }
-
-            if token.eq_ignore_ascii_case("doublealt")
-                || token.eq_ignore_ascii_case("double-alt")
-                || token.eq_ignore_ascii_case("double_alt")
-            {
-                parsed.double_alt = true;
-                continue;
-            }
-
             match token.to_ascii_lowercase().as_str() {
-                "ctrl" | "control" => parsed.control = true,
-                "shift" => parsed.shift = true,
-                "alt" | "option" => parsed.alt = true,
-                "cmd" | "command" | "meta" => parsed.meta = true,
-                "space" => parsed.key = Keycode::Space,
-                "tab" => parsed.key = Keycode::Tab,
-                "enter" | "return" => parsed.key = Keycode::Enter,
-                "esc" | "escape" => parsed.key = Keycode::Escape,
-                "delete" | "backspace" => parsed.key = Keycode::Delete,
-                "f1" => parsed.key = Keycode::F1,
-                "f2" => parsed.key = Keycode::F2,
-                "f3" => parsed.key = Keycode::F3,
-                "f4" => parsed.key = Keycode::F4,
-                "f5" => parsed.key = Keycode::F5,
-                "f6" => parsed.key = Keycode::F6,
-                "f7" => parsed.key = Keycode::F7,
-                "f8" => parsed.key = Keycode::F8,
-                "f9" => parsed.key = Keycode::F9,
-                "f10" => parsed.key = Keycode::F10,
-                "f11" => parsed.key = Keycode::F11,
-                "f12" => parsed.key = Keycode::F12,
-                other if other.len() == 1 => {
-                    parsed.key = keycode_from_token(other.chars().next().unwrap())?;
+                "longctrl" | "long-ctrl" | "long_ctrl" | "doublectrl" | "double-ctrl"
+                | "double_ctrl" | "doublectrlstrict" | "double-ctrl-strict"
+                | "double_ctrl_strict" => {
+                    double_press = Some(ModifierKey::Ctrl);
                 }
+                "doublealt" | "double-alt" | "double_alt" => {
+                    double_press = Some(ModifierKey::Alt);
+                }
+                "ctrl" | "control" => set_combo_modifier(&mut combo, ModifierFlag::Control),
+                "shift" => set_combo_modifier(&mut combo, ModifierFlag::Shift),
+                "alt" | "option" => set_combo_modifier(&mut combo, ModifierFlag::Alt),
+                "cmd" | "command" | "meta" => set_combo_modifier(&mut combo, ModifierFlag::Meta),
+                "space" => set_combo_key(&mut combo, Keycode::Space),
+                "tab" => set_combo_key(&mut combo, Keycode::Tab),
+                "enter" | "return" => set_combo_key(&mut combo, Keycode::Enter),
+                "esc" | "escape" => set_combo_key(&mut combo, Keycode::Escape),
+                "delete" | "backspace" => set_combo_key(&mut combo, Keycode::Delete),
+                "f1" => set_combo_key(&mut combo, Keycode::F1),
+                "f2" => set_combo_key(&mut combo, Keycode::F2),
+                "f3" => set_combo_key(&mut combo, Keycode::F3),
+                "f4" => set_combo_key(&mut combo, Keycode::F4),
+                "f5" => set_combo_key(&mut combo, Keycode::F5),
+                "f6" => set_combo_key(&mut combo, Keycode::F6),
+                "f7" => set_combo_key(&mut combo, Keycode::F7),
+                "f8" => set_combo_key(&mut combo, Keycode::F8),
+                "f9" => set_combo_key(&mut combo, Keycode::F9),
+                "f10" => set_combo_key(&mut combo, Keycode::F10),
+                "f11" => set_combo_key(&mut combo, Keycode::F11),
+                "f12" => set_combo_key(&mut combo, Keycode::F12),
+                other if other.len() == 1 => set_combo_key(
+                    &mut combo,
+                    keycode_from_token(other.chars().next().unwrap())?,
+                ),
                 other => {
                     return Err(VoiceInputError::Hotkey(format!(
                         "不支持的热键片段：{other}"
@@ -97,55 +106,98 @@ impl LinuxHotkeySpec {
             }
         }
 
-        Ok(parsed)
+        Ok(Self {
+            kind: double_press.map(HotkeyKind::DoublePress).unwrap_or(combo),
+        })
+    }
+
+    pub fn kind(&self) -> HotkeyKind {
+        self.kind
     }
 
     pub fn matches(&self, keys: &[Keycode]) -> bool {
-        if self.double_ctrl {
-            return is_ctrl_only(keys);
-        }
-        if self.double_alt {
-            return is_alt_only(keys);
-        }
+        match self.kind {
+            HotkeyKind::DoublePress(ModifierKey::Ctrl) => is_ctrl_only(keys),
+            HotkeyKind::DoublePress(ModifierKey::Alt) => is_alt_only(keys),
+            HotkeyKind::Combo {
+                key,
+                control,
+                shift,
+                alt,
+                meta,
+            } => {
+                if !keys.contains(&key) {
+                    return false;
+                }
 
-        if !keys.contains(&self.key) {
-            return false;
-        }
+                if control && !has_any(keys, &[Keycode::LControl, Keycode::RControl]) {
+                    return false;
+                }
+                if shift && !has_any(keys, &[Keycode::LShift, Keycode::RShift]) {
+                    return false;
+                }
+                if alt
+                    && !has_any(
+                        keys,
+                        &[
+                            Keycode::LAlt,
+                            Keycode::RAlt,
+                            Keycode::LOption,
+                            Keycode::ROption,
+                        ],
+                    )
+                {
+                    return false;
+                }
+                if meta
+                    && !has_any(
+                        keys,
+                        &[
+                            Keycode::LMeta,
+                            Keycode::RMeta,
+                            Keycode::Command,
+                            Keycode::RCommand,
+                        ],
+                    )
+                {
+                    return false;
+                }
 
-        if self.control && !has_any(keys, &[Keycode::LControl, Keycode::RControl]) {
-            return false;
+                true
+            }
         }
-        if self.shift && !has_any(keys, &[Keycode::LShift, Keycode::RShift]) {
-            return false;
-        }
-        if self.alt
-            && !has_any(
-                keys,
-                &[
-                    Keycode::LAlt,
-                    Keycode::RAlt,
-                    Keycode::LOption,
-                    Keycode::ROption,
-                ],
-            )
-        {
-            return false;
-        }
-        if self.meta
-            && !has_any(
-                keys,
-                &[
-                    Keycode::LMeta,
-                    Keycode::RMeta,
-                    Keycode::Command,
-                    Keycode::RCommand,
-                ],
-            )
-        {
-            return false;
-        }
+    }
+}
 
-        true
+#[derive(Debug, Clone, Copy)]
+enum ModifierFlag {
+    Control,
+    Shift,
+    Alt,
+    Meta,
+}
+
+fn set_combo_modifier(combo: &mut HotkeyKind, flag: ModifierFlag) {
+    if let HotkeyKind::Combo {
+        control,
+        shift,
+        alt,
+        meta,
+        ..
+    } = combo
+    {
+        match flag {
+            ModifierFlag::Control => *control = true,
+            ModifierFlag::Shift => *shift = true,
+            ModifierFlag::Alt => *alt = true,
+            ModifierFlag::Meta => *meta = true,
+        }
+    }
+}
+
+fn set_combo_key(combo: &mut HotkeyKind, key: Keycode) {
+    if let HotkeyKind::Combo { key: combo_key, .. } = combo {
+        *combo_key = key;
     }
 }
 
@@ -235,114 +287,85 @@ impl LinuxHotkeyWatcher {
         let handle = thread::spawn(move || {
             let device = DeviceState::new();
             let mut last_trigger_at: Option<Instant> = None;
-            let mut last_ctrl_release: Option<Instant> = None;
-            let mut last_alt_release: Option<Instant> = None;
-            let mut ctrl_was_held = false;
-            let mut alt_was_held = false;
+            let mut last_release: Option<Instant> = None;
+            let mut was_held = false;
             let mut latched = false;
             const TRIGGER_COOLDOWN: Duration = Duration::from_millis(800);
 
             while !stop_for_thread.load(Ordering::SeqCst) {
                 let keys = device.get_keys();
 
-                if spec.double_alt {
-                    let alt_held = has_any(&keys, &[Keycode::LAlt, Keycode::RAlt]);
-                    let now = Instant::now();
-                    let in_cooldown = last_trigger_at
-                        .map(|last| now.duration_since(last) <= TRIGGER_COOLDOWN)
-                        .unwrap_or(false);
-
-                    if alt_held && !alt_was_held {
-                        // Alt 刚按下
-                        if !in_cooldown {
-                            if let Some(release_time) = last_alt_release {
-                                if now.duration_since(release_time) <= double_press_window {
-                                    // 两次 Alt 按下间隔在窗口内 → 触发
-                                    if active.is_active() {
-                                        if recorder.is_recording() {
-                                            eprintln!("检测到双击 Alt 停止热键，正在结束录音...");
-                                            recorder.stop();
-                                        }
-                                    } else {
-                                        eprintln!("检测到双击 Alt 开始热键，正在启动录音...");
-                                        let _ = sender.send(());
-                                    }
-                                    last_trigger_at = Some(now);
-                                    last_alt_release = None;
-                                }
-                            }
-                        }
-                    } else if !alt_held && alt_was_held {
-                        // Alt 刚释放
-                        last_alt_release = Some(now);
-                    }
-
-                    alt_was_held = alt_held;
-                } else if spec.double_ctrl {
-                    // 使用 has_any 而不是 is_ctrl_only 来检测 Ctrl 状态。
-                    // is_ctrl_only 会在 Ctrl+C 后释放 C 时产生虚假的上升沿
-                    //（因为 Ctrl 再次变成"单独按下"），导致组合键误触发。
-                    let ctrl_held = has_any(&keys, &[Keycode::LControl, Keycode::RControl]);
-                    let now = Instant::now();
-                    let in_cooldown = last_trigger_at
-                        .map(|last| now.duration_since(last) <= TRIGGER_COOLDOWN)
-                        .unwrap_or(false);
-
-                    if ctrl_held && !ctrl_was_held {
-                        // Ctrl 刚按下
-                        if !in_cooldown {
-                            if let Some(release_time) = last_ctrl_release {
-                                if now.duration_since(release_time) <= double_press_window {
-                                    // 两次 Ctrl 按下间隔在窗口内 → 触发
-                                    if active.is_active() {
-                                        if recorder.is_recording() {
-                                            eprintln!("检测到双击 Ctrl 停止热键，正在结束录音...");
-                                            recorder.stop();
-                                        }
-                                    } else {
-                                        eprintln!("检测到双击 Ctrl 开始热键，正在启动录音...");
-                                        let _ = sender.send(());
-                                    }
-                                    last_trigger_at = Some(now);
-                                    last_ctrl_release = None;
-                                }
-                            }
-                        } else {
-                            // 冷却中，忽略
-                        }
-                    } else if !ctrl_held && ctrl_was_held {
-                        // Ctrl 刚释放
-                        last_ctrl_release = Some(now);
-                    }
-
-                    ctrl_was_held = ctrl_held;
-                } else {
-                    // 组合热键（Ctrl+Shift+Space 等）
-                    let pressed = spec.matches(&keys);
-
-                    if pressed && !latched {
+                match spec.kind() {
+                    HotkeyKind::DoublePress(modifier) => {
+                        // 使用 has_any 而不是 is_*_only 检测修饰键状态。
+                        // is_*_only 会在组合键（如 Ctrl+C）释放 C 时产生虚假的
+                        // 上升沿（因为 Ctrl 再次变成"单独按下"），导致误触发。
+                        let held = modifier.is_held(&keys);
                         let now = Instant::now();
-                        let recently_triggered = last_trigger_at
+                        let in_cooldown = last_trigger_at
                             .map(|last| now.duration_since(last) <= TRIGGER_COOLDOWN)
                             .unwrap_or(false);
-                        if recently_triggered {
-                            latched = true;
-                            continue;
+
+                        if held && !was_held {
+                            // 修饰键刚按下
+                            if !in_cooldown {
+                                if let Some(release_time) = last_release {
+                                    if now.duration_since(release_time) <= double_press_window {
+                                        // 两次按下间隔在窗口内 → 触发
+                                        let label = modifier.label();
+                                        if active.is_active() {
+                                            if recorder.is_recording() {
+                                                eprintln!(
+                                                    "检测到双击 {label} 停止热键，正在结束录音..."
+                                                );
+                                                recorder.stop();
+                                            }
+                                        } else {
+                                            eprintln!(
+                                                "检测到双击 {label} 开始热键，正在启动录音..."
+                                            );
+                                            let _ = sender.send(());
+                                        }
+                                        last_trigger_at = Some(now);
+                                        last_release = None;
+                                    }
+                                }
+                            }
+                        } else if !held && was_held {
+                            // 修饰键刚释放
+                            last_release = Some(now);
                         }
 
-                        if active.is_active() {
-                            if recorder.is_recording() {
-                                eprintln!("检测到停止热键，正在结束录音...");
-                                recorder.stop();
+                        was_held = held;
+                    }
+                    HotkeyKind::Combo { .. } => {
+                        // 组合热键（Ctrl+Shift+Space 等）
+                        let pressed = spec.matches(&keys);
+
+                        if pressed && !latched {
+                            let now = Instant::now();
+                            let recently_triggered = last_trigger_at
+                                .map(|last| now.duration_since(last) <= TRIGGER_COOLDOWN)
+                                .unwrap_or(false);
+                            if recently_triggered {
+                                latched = true;
+                                continue;
                             }
-                        } else {
-                            eprintln!("检测到开始热键，正在启动录音...");
-                            let _ = sender.send(());
+
+                            if active.is_active() {
+                                if recorder.is_recording() {
+                                    eprintln!("检测到停止热键，正在结束录音...");
+                                    recorder.stop();
+                                }
+                            } else {
+                                eprintln!("检测到开始热键，正在启动录音...");
+                                let _ = sender.send(());
+                            }
+                            last_trigger_at = Some(now);
+                            latched = true;
+                        } else if !pressed {
+                            latched = false;
                         }
-                        last_trigger_at = Some(now);
-                        latched = true;
-                    } else if !pressed {
-                        latched = false;
                     }
                 }
 
@@ -392,21 +415,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_default_linux_hotkey() {
+    fn parses_combo_hotkey() {
         let spec = LinuxHotkeySpec::parse("Ctrl+Shift+Space").expect("parse hotkey");
         assert!(spec.matches(&[Keycode::Space, Keycode::LControl, Keycode::LShift]));
         assert!(!spec.matches(&[Keycode::Space, Keycode::LControl]));
     }
 
     #[test]
-    fn parses_mac_like_default_hotkey_for_linux_runtime() {
-        let spec = LinuxHotkeySpec::parse("Ctrl+Shift+Space").expect("parse hotkey");
-        assert!(spec.matches(&[Keycode::Space, Keycode::LControl, Keycode::LShift]));
-    }
-
-    #[test]
     fn parses_double_ctrl_hotkey() {
         let spec = LinuxHotkeySpec::parse("DoubleCtrl").expect("parse hotkey");
+        assert_eq!(spec.kind(), HotkeyKind::DoublePress(ModifierKey::Ctrl));
         assert!(spec.matches(&[Keycode::LControl]));
         assert!(spec.matches(&[Keycode::RControl]));
         assert!(spec.matches(&[Keycode::LControl, Keycode::RControl]));
@@ -415,18 +433,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_double_ctrl_strict_hotkey() {
-        let spec = LinuxHotkeySpec::parse("DoubleCtrlStrict").expect("parse hotkey");
-        assert!(spec.matches(&[Keycode::LControl]));
-        assert!(spec.matches(&[Keycode::RControl]));
-        assert!(!spec.matches(&[Keycode::Space]));
-    }
-
-    #[test]
     fn parses_double_alt_hotkey() {
         let spec = LinuxHotkeySpec::parse("DoubleAlt").expect("parse hotkey");
-        assert!(spec.double_alt);
-        assert!(!spec.double_ctrl);
+        assert_eq!(spec.kind(), HotkeyKind::DoublePress(ModifierKey::Alt));
         assert!(spec.matches(&[Keycode::LAlt]));
         assert!(spec.matches(&[Keycode::RAlt]));
         assert!(!spec.matches(&[Keycode::Space]));
