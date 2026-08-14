@@ -1,13 +1,9 @@
 use std::time::Duration;
 
-use crate::{
-    run_live_app, settings_path, LinuxAppSettings, LinuxBackendKind, LinuxHostConfig,
-    LinuxLiveAppConfig,
-};
+use crate::{run_live_app, settings_path, LinuxAppSettings, LinuxLiveAppConfig};
 
 #[derive(Debug, Clone)]
 pub struct LinuxLiveArgs {
-    pub backend: LinuxBackendKind,
     pub activation_hotkey: Option<String>,
     pub double_press_window_ms: Option<u64>,
     pub silence_stop_ms: Option<u64>,
@@ -16,7 +12,6 @@ pub struct LinuxLiveArgs {
 impl Default for LinuxLiveArgs {
     fn default() -> Self {
         Self {
-            backend: LinuxBackendKind::IBus,
             activation_hotkey: None,
             double_press_window_ms: None,
             silence_stop_ms: None,
@@ -55,23 +50,11 @@ pub fn run_live_with_args(args: LinuxLiveArgs) -> Result<(), String> {
         eprintln!("保存 Linux 配置失败：{err}");
     }
 
-    if args.backend == LinuxBackendKind::Fcitx5 {
-        return Err("Fcitx5 常驻路径还没有接入原生绑定，请先使用 --backend ibus".to_string());
-    }
-
-    #[cfg(not(feature = "ibus"))]
-    if args.backend == LinuxBackendKind::IBus {
-        return Err(
-            "当前构建未启用 IBus 支持，请改用 `cargo run -p voice-input-linux --features ibus --bin voice-input-linux-app -- --backend ibus`"
-                .to_string(),
-        );
+    if cfg!(not(feature = "ibus")) {
+        return Err("当前构建未启用 IBus 支持，请使用 --features ibus 重新构建".to_string());
     }
 
     let mut config = LinuxLiveAppConfig {
-        host: LinuxHostConfig {
-            backend: args.backend,
-            service_name: "voice-input".to_string(),
-        },
         max_recording_duration: Duration::from_secs(30),
         double_press_window: Duration::from_millis(effective_window_ms),
         silence_stop_timeout: Duration::from_millis(effective_silence_stop_ms),
@@ -96,7 +79,7 @@ pub fn parse_live_args(args: Vec<String>) -> Result<LinuxLiveArgs, String> {
                 let value = iter
                     .next()
                     .ok_or_else(|| String::from("缺少 --backend 的值"))?;
-                parsed.backend = parse_backend(&value)?;
+                validate_backend(&value)?;
             }
             "--activation-hotkey" => {
                 let value = iter
@@ -132,10 +115,12 @@ pub fn parse_live_args(args: Vec<String>) -> Result<LinuxLiveArgs, String> {
     Ok(parsed)
 }
 
-fn parse_backend(value: &str) -> Result<LinuxBackendKind, String> {
+pub fn validate_backend(value: &str) -> Result<(), String> {
     match value.to_ascii_lowercase().as_str() {
-        "ibus" => Ok(LinuxBackendKind::IBus),
-        "fcitx5" | "fcitx" => Ok(LinuxBackendKind::Fcitx5),
-        other => Err(format!("不支持的 Linux 后端：{other}")),
+        "ibus" => Ok(()),
+        "fcitx5" | "fcitx" => Err(
+            "Fcitx5 路径还没有接入原生绑定，请使用 --backend ibus".to_string(),
+        ),
+        other => Err(format!("不支持的 Linux 后端：{other}（仅支持 ibus）")),
     }
 }

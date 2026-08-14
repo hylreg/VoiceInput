@@ -4,8 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::backend::LinuxBackendKind;
-use crate::host::{LinuxHostConfig, LinuxInputMethodHost};
+use crate::host::LinuxInputMethodHost;
 use crate::hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
 use crate::recorder::LinuxMicAudioRecorder;
 use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
@@ -18,12 +17,12 @@ use crate::ibus::{backspace_in_active_window, insert_indicator_and_save_clipboar
 #[derive(Debug, Clone)]
 pub struct LinuxLiveAppConfig {
     pub app: AppConfig,
-    pub host: LinuxHostConfig,
     pub asr: FunAsrConfig,
     pub max_recording_duration: Duration,
     pub double_press_window: Duration,
     pub silence_stop_timeout: Duration,
     pub show_status_item: bool,
+    pub service_name: String,
 }
 
 impl Default for LinuxLiveAppConfig {
@@ -33,15 +32,12 @@ impl Default for LinuxLiveAppConfig {
 
         Self {
             app,
-            host: LinuxHostConfig {
-                backend: LinuxBackendKind::IBus,
-                service_name: "voice-input".to_string(),
-            },
             asr: FunAsrConfig::from_env(),
             max_recording_duration: Duration::from_secs(30),
             double_press_window: Duration::from_millis(300),
             silence_stop_timeout: Duration::from_millis(1500),
             show_status_item: true,
+            service_name: "voice-input".to_string(),
         }
     }
 }
@@ -240,14 +236,14 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
         recorder_for_watcher,
         config.double_press_window,
     )?;
-    let host = LinuxInputMethodHost::new(config.host.clone());
+    let host = LinuxInputMethodHost::new(config.service_name.clone());
     println!("正在预加载 ASR 模型...");
     let asr_runner = build_linux_asr(&config.asr)?;
     let transcriber = LocalFunAsrTranscriber::new(config.asr.clone(), asr_runner);
     println!("ASR 模型预加载完成");
     let tray = if config.show_status_item {
         let tray = spawn_linux_tray(LinuxTrayConfig::new(
-            config.host.service_name.clone(),
+            config.service_name.clone(),
             "VoiceInput".to_string(),
             recorder.clone(),
             Arc::clone(&quit_requested),

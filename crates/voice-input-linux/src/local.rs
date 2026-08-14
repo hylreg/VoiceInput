@@ -1,10 +1,7 @@
-use std::path::PathBuf;
-
 use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber, PythonFunAsrRunner};
 use voice_input_core::{AppConfig, AppController, AudioRecorder, HotkeyManager};
 
-use crate::backend::{LinuxBackend, LinuxBackendKind};
-use crate::host::{LinuxHostConfig, LinuxInputMethodHost};
+use crate::host::LinuxInputMethodHost;
 
 // ── Inlined from voice-input-runtime::local ──
 
@@ -32,41 +29,24 @@ pub fn build_local_python_runtime_config(
 
 // ── Linux-specific local voice input ──
 
-#[derive(Debug, Clone)]
-pub struct LinuxLocalVoiceInputConfig {
-    pub runtime: LocalVoiceInputConfig,
-    pub host: LinuxHostConfig,
-}
-
-impl Default for LinuxLocalVoiceInputConfig {
-    fn default() -> Self {
-        Self {
-            runtime: LocalVoiceInputConfig::default(),
-            host: LinuxHostConfig::default(),
-        }
-    }
-}
-
 pub struct LinuxLocalVoiceInput {
     controller: AppController,
-    backend_kind: LinuxBackendKind,
     service_name: String,
 }
 
 impl LinuxLocalVoiceInput {
     pub fn new(
-        config: LinuxLocalVoiceInputConfig,
+        config: LocalVoiceInputConfig,
         hotkeys: Box<dyn HotkeyManager>,
         recorder: Box<dyn AudioRecorder>,
         runner: Box<dyn FunAsrRunner>,
-        backend: Box<dyn LinuxBackend>,
+        service_name: impl Into<String>,
     ) -> Self {
-        let backend_kind = backend.kind();
-        let service_name = config.host.service_name.clone();
-        let transcriber = LocalFunAsrTranscriber::new(config.runtime.asr, runner);
-        let host = LinuxInputMethodHost::new_with_backend(config.host, backend);
+        let service_name = service_name.into();
+        let transcriber = LocalFunAsrTranscriber::new(config.asr, runner);
+        let host = LinuxInputMethodHost::new(service_name.clone());
         let controller = AppController::new(
-            config.runtime.app,
+            config.app,
             hotkeys,
             recorder,
             Box::new(transcriber),
@@ -75,7 +55,6 @@ impl LinuxLocalVoiceInput {
 
         Self {
             controller,
-            backend_kind,
             service_name,
         }
     }
@@ -84,48 +63,7 @@ impl LinuxLocalVoiceInput {
         self.controller.run_demo()
     }
 
-    pub fn backend_kind(&self) -> LinuxBackendKind {
-        self.backend_kind
-    }
-
     pub fn service_name(&self) -> &str {
         &self.service_name
     }
-}
-
-pub fn parse_audio_file_with_optional_backend_arg<T, F>(
-    args: Vec<String>,
-    default_backend: T,
-    parse_backend: F,
-) -> Result<(PathBuf, T), String>
-where
-    F: Fn(&str) -> Result<T, String>,
-{
-    let mut audio_file = None;
-    let mut backend = Some(default_backend);
-    let mut iter = args.into_iter();
-    let _bin = iter.next();
-
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--audio-file" => {
-                let value = iter
-                    .next()
-                    .ok_or_else(|| String::from("缺少 --audio-file 的值"))?;
-                audio_file = Some(PathBuf::from(value));
-            }
-            "--backend" => {
-                let value = iter
-                    .next()
-                    .ok_or_else(|| String::from("缺少 --backend 的值"))?;
-                backend = Some(parse_backend(&value)?);
-            }
-            "--help" | "-h" => return Err(String::from("help")),
-            other => return Err(format!("不支持的参数：{other}")),
-        }
-    }
-
-    let audio_file = audio_file.ok_or_else(|| String::from("缺少必需参数 --audio-file"))?;
-    let backend = backend.expect("default backend should always be present");
-    Ok((audio_file, backend))
 }

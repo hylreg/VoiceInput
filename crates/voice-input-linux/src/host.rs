@@ -1,59 +1,42 @@
-use crate::backend::{backend_from_kind, LinuxBackend, LinuxBackendKind};
 use voice_input_core::{InputMethodHost, Result};
 
-#[derive(Debug, Clone)]
-pub struct LinuxHostConfig {
-    pub backend: LinuxBackendKind,
-    pub service_name: String,
-}
-
-impl Default for LinuxHostConfig {
-    fn default() -> Self {
-        Self {
-            backend: LinuxBackendKind::Fcitx5,
-            service_name: "voice-input".to_string(),
-        }
-    }
-}
-
+/// Linux 文本提交宿主：直接通过 xdotool 注入活动窗口。
+/// composition 相关方法为 no-op——VoiceInput 不是注册的 IBus 引擎，
+/// 任何 IBus D-Bus 交互都会干扰目标应用的输入法光标状态。
 pub struct LinuxInputMethodHost {
-    config: LinuxHostConfig,
-    backend: Box<dyn LinuxBackend>,
+    service_name: String,
 }
 
 impl LinuxInputMethodHost {
-    pub fn new(config: LinuxHostConfig) -> Self {
-        let backend_kind = config.backend;
-        Self::new_with_backend(config, backend_from_kind(backend_kind))
+    pub fn new(service_name: impl Into<String>) -> Self {
+        Self {
+            service_name: service_name.into(),
+        }
     }
 
-    pub fn new_with_backend(config: LinuxHostConfig, backend: Box<dyn LinuxBackend>) -> Self {
-        Self { config, backend }
-    }
-
-    pub fn backend_kind(&self) -> LinuxBackendKind {
-        self.config.backend
+    pub fn service_name(&self) -> &str {
+        &self.service_name
     }
 }
 
 impl InputMethodHost for LinuxInputMethodHost {
     fn start_composition(&self) -> Result<()> {
-        self.backend.start()
+        Ok(())
     }
 
-    fn update_preedit(&self, text: &str) -> Result<()> {
-        self.backend.update_preedit(text)
+    fn update_preedit(&self, _text: &str) -> Result<()> {
+        Ok(())
     }
 
     fn commit_text(&self, text: &str) -> Result<()> {
-        self.backend.commit_text(text)
+        crate::ibus::insert_text_into_active_window(text, None)
     }
 
     fn cancel_composition(&self) -> Result<()> {
-        self.backend.cancel()
+        Ok(())
     }
 
     fn end_composition(&self) -> Result<()> {
-        self.backend.stop()
+        Ok(())
     }
 }

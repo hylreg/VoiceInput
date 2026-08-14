@@ -1,9 +1,7 @@
 use std::env;
 use std::path::PathBuf;
 
-use voice_input_linux::{
-    parse_backend_kind, parse_live_args, run_live_with_args, run_smoke, LinuxBackendKind,
-};
+use voice_input_linux::{parse_live_args, run_live_with_args, run_smoke};
 
 fn main() {
     std::process::exit(run());
@@ -25,10 +23,7 @@ fn run() -> i32 {
     };
 
     let result = match command {
-        Command::Smoke {
-            audio_file,
-            backend,
-        } => run_smoke(audio_file, backend),
+        Command::Smoke { audio_file } => run_smoke(audio_file),
         Command::Live(args) => run_live_with_args(args),
     };
 
@@ -42,10 +37,7 @@ fn run() -> i32 {
 }
 
 enum Command {
-    Smoke {
-        audio_file: PathBuf,
-        backend: LinuxBackendKind,
-    },
+    Smoke { audio_file: PathBuf },
     Live(voice_input_linux::LinuxLiveArgs),
 }
 
@@ -74,25 +66,31 @@ fn parse_command(args: Vec<String>) -> Result<Command, ParseOutcome> {
 }
 
 fn parse_smoke_args(args: Vec<String>) -> Result<Command, ParseOutcome> {
-    let mut forwarded = vec!["voice-input-linux-smoke".to_string()];
-    forwarded.extend(args);
-    let (audio_file, backend) =
-        voice_input_linux::parse_audio_file_with_optional_backend_arg(
-            forwarded,
-            LinuxBackendKind::IBus,
-            parse_backend_kind,
-        )
-        .map_err(|msg| {
-            if msg == "help" {
-                ParseOutcome::Help(usage())
-            } else {
-                ParseOutcome::Error(msg)
+    let mut iter = args.into_iter();
+    let mut audio_file = None;
+
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--audio-file" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| ParseOutcome::Error("缺少 --audio-file 的值".to_string()))?;
+                audio_file = Some(PathBuf::from(value));
             }
-        })?;
-    Ok(Command::Smoke {
-        audio_file,
-        backend,
-    })
+            "--backend" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| ParseOutcome::Error("缺少 --backend 的值".to_string()))?;
+                voice_input_linux::validate_backend(&value).map_err(ParseOutcome::Error)?;
+            }
+            "--help" | "-h" => return Err(ParseOutcome::Help(usage())),
+            other => return Err(ParseOutcome::Error(format!("不支持的参数：{other}"))),
+        }
+    }
+
+    let audio_file = audio_file
+        .ok_or_else(|| ParseOutcome::Error("缺少必需参数 --audio-file".to_string()))?;
+    Ok(Command::Smoke { audio_file })
 }
 
 fn parse_live_subcommand(args: Vec<String>) -> Result<Command, ParseOutcome> {

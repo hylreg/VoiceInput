@@ -1,295 +1,13 @@
 #[cfg(feature = "ibus")]
 use std::process::Command;
-use std::sync::{Arc, Mutex};
 #[cfg(feature = "ibus")]
 use std::thread;
 #[cfg(feature = "ibus")]
 use std::time::{Duration, Instant};
 
-use crate::backend::LinuxBackendKind;
-use voice_input_core::{Result, VoiceInputError};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IbusEngineEvent {
-    StartComposition,
-    UpdatePreedit(String),
-    CommitText(String),
-    CancelComposition,
-    EndComposition,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IbusEngineSpec {
-    pub engine_name: String,
-    pub object_path: String,
-    pub service_name: String,
-}
-
-impl Default for IbusEngineSpec {
-    fn default() -> Self {
-        Self {
-            engine_name: "voice-input".to_string(),
-            object_path: "/com/example/VoiceInput/Engine".to_string(),
-            service_name: "voice-input".to_string(),
-        }
-    }
-}
-
-pub trait IbusEngineBridge {
-    fn start_composition(&self) -> Result<()>;
-    fn update_preedit(&self, text: &str) -> Result<()>;
-    fn commit_text(&self, text: &str) -> Result<()>;
-    fn cancel_composition(&self) -> Result<()>;
-    fn end_composition(&self) -> Result<()>;
-}
-
+use voice_input_core::Result;
 #[cfg(feature = "ibus")]
-pub struct IbusClientBridge {
-    #[allow(dead_code)]
-    spec: IbusEngineSpec,
-    events: Arc<Mutex<Vec<IbusEngineEvent>>>,
-}
-
-#[cfg(feature = "ibus")]
-impl IbusClientBridge {
-    pub fn try_new(spec: IbusEngineSpec) -> Result<Self> {
-        // 不连接 IBus 总线、不创建输入上下文。
-        // VoiceInput 不是注册的 IBus 引擎，所有 IBus D-Bus
-        // 交互都会干扰目标应用的输入法光标状态。
-        Ok(Self {
-            spec,
-            events: Arc::new(Mutex::new(Vec::new())),
-        })
-    }
-}
-
-#[cfg(feature = "ibus")]
-impl IbusEngineBridge for IbusClientBridge {
-    fn start_composition(&self) -> Result<()> {
-        // 不创建 IBus 上下文、不调用任何 IBus D-Bus 方法。
-        // VoiceInput 不是注册的 IBus 引擎，任何 D-Bus 交互都会
-        // 干扰目标应用的输入法状态和光标显示。
-
-        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
-            let now = debug_timestamp();
-            eprintln!("[VOICEINPUT_DEBUG {now}] IBus start_composition (no-op)");
-        }
-
-        if let Ok(mut lock) = self.events.lock() {
-            lock.push(IbusEngineEvent::StartComposition);
-        }
-
-        Ok(())
-    }
-
-    fn update_preedit(&self, text: &str) -> Result<()> {
-        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
-            let now = debug_timestamp();
-            eprintln!("[VOICEINPUT_DEBUG {now}] IBus update_preedit len={} (no-op)", text.len());
-        }
-
-        if let Ok(mut lock) = self.events.lock() {
-            lock.push(IbusEngineEvent::UpdatePreedit(text.to_string()));
-        }
-
-        Ok(())
-    }
-
-    fn commit_text(&self, text: &str) -> Result<()> {
-        if let Ok(mut lock) = self.events.lock() {
-            lock.push(IbusEngineEvent::CommitText(text.to_string()));
-        }
-
-        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
-            let now = debug_timestamp();
-            let preview: String = text.chars().take(20).collect();
-            eprintln!("[VOICEINPUT_DEBUG {now}] IBus commit_text → insert_text \"{preview}\" (no-op)");
-        }
-
-        if let Err(err) = insert_text_into_active_window(text, None) {
-            return Err(VoiceInputError::Injection(format!(
-                "Linux 文本提交失败：{err}"
-            )));
-        }
-
-        Ok(())
-    }
-
-    fn cancel_composition(&self) -> Result<()> {
-        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
-            let now = debug_timestamp();
-            eprintln!("[VOICEINPUT_DEBUG {now}] IBus cancel_composition (no-op)");
-        }
-
-        if let Ok(mut lock) = self.events.lock() {
-            lock.push(IbusEngineEvent::CancelComposition);
-        }
-
-        Ok(())
-    }
-
-    fn end_composition(&self) -> Result<()> {
-        if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
-            let now = debug_timestamp();
-            eprintln!("[VOICEINPUT_DEBUG {now}] IBus end_composition (no-op)");
-        }
-
-        if let Ok(mut lock) = self.events.lock() {
-            lock.push(IbusEngineEvent::EndComposition);
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(not(feature = "ibus"))]
-pub struct IbusBackend {
-    spec: IbusEngineSpec,
-    bridge: Box<dyn IbusEngineBridge>,
-}
-
-#[cfg(feature = "ibus")]
-pub struct IbusBackend {
-    spec: IbusEngineSpec,
-    bridge: Box<dyn IbusEngineBridge>,
-}
-
-impl IbusBackend {
-    pub fn new(spec: IbusEngineSpec) -> Self {
-        Self::new_real(spec)
-    }
-
-    pub fn new_with_bridge(spec: IbusEngineSpec, bridge: Box<dyn IbusEngineBridge>) -> Self {
-        Self { spec, bridge }
-    }
-
-    pub fn spec(&self) -> &IbusEngineSpec {
-        &self.spec
-    }
-}
-
-#[cfg(feature = "ibus")]
-impl IbusBackend {
-    pub fn new_real(spec: IbusEngineSpec) -> Self {
-        let bridge: Box<dyn IbusEngineBridge> = match IbusClientBridge::try_new(spec.clone()) {
-            Ok(client) => Box::new(client),
-            Err(_) => Box::new(UnwiredIbusBridge),
-        };
-
-        Self { spec, bridge }
-    }
-}
-
-#[cfg(not(feature = "ibus"))]
-impl IbusBackend {
-    pub fn new_real(spec: IbusEngineSpec) -> Self {
-        Self {
-            spec,
-            bridge: Box::new(UnwiredIbusBridge),
-        }
-    }
-}
-
-pub struct UnwiredIbusBridge;
-
-impl IbusEngineBridge for UnwiredIbusBridge {
-    fn start_composition(&self) -> Result<()> {
-        Err(VoiceInputError::Injection(
-            "IBus 桥接尚未接入原生绑定".to_string(),
-        ))
-    }
-
-    fn update_preedit(&self, _text: &str) -> Result<()> {
-        Err(VoiceInputError::Injection(
-            "IBus 桥接尚未接入原生绑定".to_string(),
-        ))
-    }
-
-    fn commit_text(&self, _text: &str) -> Result<()> {
-        Err(VoiceInputError::Injection(
-            "IBus 桥接尚未接入原生绑定".to_string(),
-        ))
-    }
-
-    fn cancel_composition(&self) -> Result<()> {
-        Err(VoiceInputError::Injection(
-            "IBus 桥接尚未接入原生绑定".to_string(),
-        ))
-    }
-
-    fn end_composition(&self) -> Result<()> {
-        Err(VoiceInputError::Injection(
-            "IBus 桥接尚未接入原生绑定".to_string(),
-        ))
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct MockIbusBridge {
-    events: Arc<Mutex<Vec<IbusEngineEvent>>>,
-}
-
-impl MockIbusBridge {
-    pub fn events(&self) -> Vec<IbusEngineEvent> {
-        self.events.lock().expect("模拟 IBus 桥接锁").clone()
-    }
-
-    fn push(&self, event: IbusEngineEvent) -> Result<()> {
-        self.events
-            .lock()
-            .map_err(|_| VoiceInputError::Injection("记录 IBus 事件失败".to_string()))?
-            .push(event);
-        Ok(())
-    }
-}
-
-impl IbusEngineBridge for MockIbusBridge {
-    fn start_composition(&self) -> Result<()> {
-        self.push(IbusEngineEvent::StartComposition)
-    }
-
-    fn update_preedit(&self, text: &str) -> Result<()> {
-        self.push(IbusEngineEvent::UpdatePreedit(text.to_string()))
-    }
-
-    fn commit_text(&self, text: &str) -> Result<()> {
-        self.push(IbusEngineEvent::CommitText(text.to_string()))
-    }
-
-    fn cancel_composition(&self) -> Result<()> {
-        self.push(IbusEngineEvent::CancelComposition)
-    }
-
-    fn end_composition(&self) -> Result<()> {
-        self.push(IbusEngineEvent::EndComposition)
-    }
-}
-
-impl crate::backend::LinuxBackend for IbusBackend {
-    fn kind(&self) -> LinuxBackendKind {
-        LinuxBackendKind::IBus
-    }
-
-    fn start(&self) -> Result<()> {
-        self.bridge.start_composition()
-    }
-
-    fn update_preedit(&self, text: &str) -> Result<()> {
-        self.bridge.update_preedit(text)
-    }
-
-    fn commit_text(&self, text: &str) -> Result<()> {
-        self.bridge.commit_text(text)
-    }
-
-    fn cancel(&self) -> Result<()> {
-        self.bridge.cancel_composition()
-    }
-
-    fn stop(&self) -> Result<()> {
-        self.bridge.end_composition()
-    }
-}
+use voice_input_core::VoiceInputError;
 
 #[cfg(feature = "ibus")]
 macro_rules! debug_xdotool {
@@ -451,9 +169,8 @@ pub fn insert_text_into_active_window(text: &str, window_id: Option<&str>) -> Re
 
 #[cfg(feature = "ibus")]
 pub fn type_text_in_active_window(text: &str, window_id: Option<&str>) -> Result<()> {
-    // 调用方已确保窗口是活动窗口，
-    // 不要在此处调用 focus_window——xdotool windowfocus --sync 会抢占焦点，
-    // 导致目标应用光标闪烁或消失。
+    // 调用方已确保窗口是活动窗口，不要在此处调用 focus_window——
+    // xdotool windowfocus --sync 会抢占焦点，导致目标应用光标闪烁或消失。
 
     if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
         let now = debug_timestamp();
@@ -503,7 +220,6 @@ pub fn type_text_in_active_window(text: &str, window_id: Option<&str>) -> Result
 }
 
 #[cfg(feature = "ibus")]
-#[allow(dead_code)]
 pub fn backspace_in_active_window(count: usize, window_id: Option<&str>) -> Result<()> {
     // 不预先调用 focus_window——调用方已确保窗口是活动窗口。
     if std::env::var("VOICEINPUT_DEBUG").map_or(false, |v| v == "1") {
@@ -558,6 +274,12 @@ pub fn backspace_in_active_window(count: usize, window_id: Option<&str>) -> Resu
 #[cfg(not(feature = "ibus"))]
 pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
     Ok(ClipboardRestoreGuard { _clipboard: None })
+}
+
+#[cfg(not(feature = "ibus"))]
+#[allow(dead_code)]
+pub fn insert_text_into_active_window(_text: &str, _window_id: Option<&str>) -> Result<()> {
+    Ok(())
 }
 
 #[cfg(not(feature = "ibus"))]
