@@ -2914,7 +2914,7 @@ impl LinuxHotkeySpec {
         }
 
         Ok(Self {
-            kind: double_press.unwrap_or(combo),
+            kind: double_press.map(HotkeyKind::DoublePress).unwrap_or(combo),
         })
     }
 
@@ -3510,3 +3510,7 @@ git commit -m "refactor: 彻底精简收尾——验证通过"
   - 质量审查追加修复（8ebb210）：(1) file.rs 测试块 rustfmt 折行（仓库存在历史 fmt 漂移，仅局部修正本任务新代码，未全仓跑 cargo fmt）；(2) 测试临时 WAV 加 `TempFileGuard` Drop guard，`record_once().expect` panic 时不泄漏 /tmp 文件；(3) `has_peak_above` 改用 `unsigned_abs() > threshold as u16`，修复 `i16::MIN` 采样在 debug 构建 panic / release 构建误判静音的边界缺陷（负阈值经 `as u16` 回绕的语义与旧代码 `abs() > 负值` 恒真一致，实际唯一调用点传 800，无影响）。
   - 审查者建议跳过并记录（不阻塞）：`average_to_mono` 与 pcm.rs `push_mono_i16_i16` 的 downmix 数学重复（超出本任务文件清单，未抽公共 helper）；runtime.rs `write_pcm_wav(...)?` 使编码错误从日志记录改为向上传播（Cursor 写入不可失败，理论性）。
   - 审查者可选 Nit 未修（其标注「不需要再修」）：file.rs 测试末尾 `std::fs::remove_file(&path).ok()` 与 guard 的 Drop 重复，可直接删该行；`has_peak_above` 未补 i16::MIN 回归测试（可加 `assert!(has_peak_above(&[i16::MIN], 800))`）。
+- **Task 7 执行记录（commit e8ac422，审查后补记）**：
+  - **spec 缺陷（计划代码块编译不过）**：Step 1 的 `kind: double_press.unwrap_or(combo)` 类型错误——`double_press` 是 `Option<ModifierKey>`，`unwrap_or` 期望 `Option<HotkeyKind>`。执行时最小修复为 `double_press.map(HotkeyKind::DoublePress).unwrap_or(combo)`（上方代码块已同步修正）；语义：双击 token 优先于组合 token，与旧代码 `matches()` 先查 `double_ctrl`/`double_alt` 的优先级一致。
+  - Step 1 代码块另有 2 处 rustfmt 漂移（单字符 match 臂折行、`set_combo_key` if-let），执行时仅对 hotkey.rs 单文件跑 rustfmt（未全仓 fmt，保留 funasr.rs/ibus.rs 历史漂移）。
+  - 测试数从 27 降为 25（删除 2 个冗余测试），全绿。
