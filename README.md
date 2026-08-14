@@ -1,6 +1,6 @@
 # VoiceInput
 
-Linux 语音输入法：双击 Alt 开始/停止录音，本地 ASR 转写后自动注入活动窗口。
+Linux 语音输入法：双击 Ctrl 开始/停止录音，本地 ASR 转写后自动注入活动窗口。
 
 ## 架构
 
@@ -28,7 +28,7 @@ scripts/voiceinput.sh linux install --audio-file testdata/smoke.wav
 
 系统依赖（Ubuntu 20.04）：`build-essential`、`python3`、`python3-venv`、`python3-pip`，以及 ASR 所需的 Python ≥ 3.12（20.04 默认 3.8，需手动安装 `python3.12`）。`pkg-config`、`libx11-dev`、`libasound2-dev`、`portaudio19-dev` 四个编译库由安装脚本自动补齐。
 
-默认热键：**双击 Alt**（可配 `--activation-hotkey DoubleCtrl`）。
+默认热键：**双击 Ctrl**（可配 `--activation-hotkey DoubleAlt`）。
 
 ## 命令入口
 
@@ -38,7 +38,7 @@ cargo run -p voice-input-linux --features ibus -- smoke --audio-file testdata/sm
 
 # live：常驻托盘，热键触发录音
 cargo run -p voice-input-linux --features ibus -- live --backend ibus \
-  [--activation-hotkey DoubleAlt] [--double-press-window-ms 300] [--silence-stop-ms 1500]
+  [--activation-hotkey DoubleCtrl] [--double-press-window-ms 300] [--silence-stop-ms 1500]
 ```
 
 直接 `cargo run` 前需先 `scripts/voiceinput.sh bootstrap` 准备 Python 环境与模型（见下文 Python 环境）。

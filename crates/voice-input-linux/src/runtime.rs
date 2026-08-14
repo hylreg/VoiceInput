@@ -29,7 +29,7 @@ pub struct LinuxLiveAppConfig {
 impl Default for LinuxLiveAppConfig {
     fn default() -> Self {
         let mut app = AppConfig::default();
-        app.activation_hotkey = "DoubleAlt".to_string();
+        app.activation_hotkey = "DoubleCtrl".to_string();
 
         Self {
             app,

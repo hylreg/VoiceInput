@@ -111,7 +111,7 @@ fn usage() -> String {
         "用法：cargo run -p voice-input-linux -- <smoke|live> [args]\n",
         "\n",
         "smoke: cargo run -p voice-input-linux --features ibus -- smoke --audio-file testdata/smoke.wav [--backend ibus]\n",
-        "live:  cargo run -p voice-input-linux --features ibus -- live [--backend ibus] [--activation-hotkey DoubleAlt] [--double-press-window-ms 300] [--silence-stop-ms 1500]\n",
+        "live:  cargo run -p voice-input-linux --features ibus -- live [--backend ibus] [--activation-hotkey DoubleCtrl] [--double-press-window-ms 300] [--silence-stop-ms 1500]\n",
     )
     .to_string()
 }

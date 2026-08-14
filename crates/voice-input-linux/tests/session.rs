@@ -4,10 +4,10 @@ use voice_input_asr::{FunAsrConfig, LocalFunAsrTranscriber, MockFunAsrRunner};
 use voice_input_linux::{transcribe_file, LinuxLiveAppConfig};
 
 #[test]
-fn live_app_defaults_to_double_alt_hotkey() {
+fn live_app_defaults_to_double_ctrl_hotkey() {
     let config = LinuxLiveAppConfig::default();
 
-    assert_eq!(config.app.activation_hotkey, "DoubleAlt");
+    assert_eq!(config.app.activation_hotkey, "DoubleCtrl");
 }
 
 #[test]
