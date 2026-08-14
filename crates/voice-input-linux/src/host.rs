@@ -24,10 +24,6 @@ impl InputMethodHost for LinuxInputMethodHost {
         Ok(())
     }
 
-    fn update_preedit(&self, _text: &str) -> Result<()> {
-        Ok(())
-    }
-
     fn commit_text(&self, text: &str) -> Result<()> {
         crate::ibus::insert_text_into_active_window(text, None)
             .map_err(|e| VoiceInputError::Injection(format!("Linux 文本提交失败：{e}")))

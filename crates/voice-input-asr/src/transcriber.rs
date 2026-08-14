@@ -1,6 +1,6 @@
 use crate::config::FunAsrConfig;
 use crate::runner::{FunAsrRequest, FunAsrRunner};
-use voice_input_core::{Result, Transcriber, Transcript, VoiceInputError};
+use voice_input_core::{Result, Transcriber, VoiceInputError};
 
 pub struct LocalFunAsrTranscriber {
     config: FunAsrConfig,
@@ -21,7 +21,7 @@ impl LocalFunAsrTranscriber {
 }
 
 impl Transcriber for LocalFunAsrTranscriber {
-    fn transcribe(&self, audio: &[u8]) -> Result<Transcript> {
+    fn transcribe(&self, audio: &[u8]) -> Result<String> {
         let text = self.transcribe_allow_empty(audio)?;
 
         if text.trim().is_empty() {
@@ -30,6 +30,6 @@ impl Transcriber for LocalFunAsrTranscriber {
             ));
         }
 
-        Ok(Transcript::new(text))
+        Ok(text)
     }
 }

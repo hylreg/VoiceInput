@@ -1,5 +1,5 @@
 use voice_input_asr::{FunAsrConfig, LocalFunAsrTranscriber, MockFunAsrRunner};
-use voice_input_core::{Transcriber, Transcript};
+use voice_input_core::Transcriber;
 
 #[test]
 fn local_transcriber_uses_local_model_config() {
@@ -14,7 +14,7 @@ fn local_transcriber_uses_local_model_config() {
         .transcribe(b"fake wav bytes")
         .expect("transcription should succeed");
 
-    assert_eq!(transcript, Transcript::new("你好，世界"));
+    assert_eq!(transcript, "你好，世界");
     let recorded = calls.lock().expect("calls lock").clone();
     assert_eq!(recorded.len(), 1);
     assert_eq!(

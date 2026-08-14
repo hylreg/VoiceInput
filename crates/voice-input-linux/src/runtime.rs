@@ -11,7 +11,7 @@ use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
 use fs2::FileExt;
 use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber, PythonFunAsrRunner};
 use voice_input_core::{AppConfig, InputMethodHost, Result, VoiceInputError};
-use crate::live::{print_live_ready, LiveJobHandle, LiveJobState};
+use crate::live::{print_live_ready, LiveJobState};
 use crate::ibus::{backspace_in_active_window, insert_indicator_and_save_clipboard};
 
 #[derive(Debug, Clone)]
@@ -135,7 +135,6 @@ fn run_recording_cycle(
     silence_stop_timeout: Duration,
     tray: Option<&LinuxTrayHandle>,
     watcher: &LinuxHotkeyWatcher,
-    _job: LiveJobHandle,
 ) -> Result<bool> {
     if let Some(tray) = tray {
         tray.set_recording(true);
@@ -288,7 +287,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
             continue;
         }
 
-        let Some(job) = LiveJobState::try_acquire(&active) else {
+        let Some(_job) = LiveJobState::try_acquire(&active) else {
             continue;
         };
 
@@ -299,7 +298,6 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
             config.silence_stop_timeout,
             tray.as_ref(),
             &watcher,
-            job,
         )? {
             break;
         }
