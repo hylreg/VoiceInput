@@ -3521,3 +3521,6 @@ git commit -m "refactor: 彻底精简收尾——验证通过"
   - 质量审查 Minor 记录待 Task 10 评估（不阻塞，计划 Step 5 明确指定的替换）：bootstrap --audio-file 复用 `voiceinput_linux_smoke_impl` 后经由其 dpkg-only 的 `voiceinput_ensure_linux_dev_deps`——非 Debian 系统会无条件 exit 2（旧内联 cargo 调用至少会尝试构建）；Debian 上 bootstrap 可能触发 sudo apt-get（旧路径不会）。目标平台为 Ubuntu 系，且对全新环境该预检反而更完善；manager-aware 改造属行为增强，超出「精简」范围。
   - 质量审查 Nit 记录：历史设计文档 `docs/superpowers/specs/2026-06-29-linux-only-refactor-design.md:98` 仍列 `linux dev`/`linux dev-streaming`（历史文档，不改）。
   - 磁盘上 `scripts/__pycache__/funasr_stream_server.cpython-38.pyc` 为被删文件的陈旧编译产物（gitignored、未被提交、惰性无害），Task 10 顺手从磁盘删除。
+- **Task 9 执行记录（commit f865481 + e1f3a13，两阶段审查后补记）**：
+  - 替换内容逐字落地、事实核查全通过（模型 catalog/默认值、脚本子命令与 flag、main.rs 参数名、默认热键、systemd 单元名、requirements 文件），无偏差。
+  - 质量审查追加修复（e1f3a13，均经协调者对照脚本核实）：(1) Important——脚本 `uv venv --python "$(command -v python3.12)"` 硬要求 Python ≥ 3.12 且无回退，README 原称 Ubuntu 20.04 一键安装（默认 3.8）会撞墙，补依赖说明并修正「可选」错误分类（6 个编译库实为脚本自动安装）；(2) `--audio-file` 实际只部署+smoke 后 exit 0（不装服务不启动），修正注释；(3) 命令入口补 bootstrap 前置说明；(4) 模型切换流程改「重新 linux install」（install 内部调 bootstrap）；(5) 表头「参数量」→「规模」；(6) systemctl 简写展开并补 disable（取消自启保留安装）。
