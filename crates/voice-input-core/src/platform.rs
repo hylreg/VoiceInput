@@ -14,10 +14,6 @@ pub trait Transcriber {
     fn transcribe(&self, audio: &[u8]) -> Result<Transcript>;
 }
 
-pub trait TextInjector {
-    fn inject(&self, text: &str) -> Result<()>;
-}
-
 pub trait InputMethodHost {
     fn start_composition(&self) -> Result<()>;
     fn update_preedit(&self, text: &str) -> Result<()>;
@@ -35,7 +31,6 @@ pub trait InputMethodHost {
 pub struct MockHotkeyManager;
 pub struct MockAudioRecorder;
 pub struct MockTranscriber;
-pub struct MockTextInjector;
 #[derive(Clone, Default)]
 pub struct MockInputMethodHost {
     events: Arc<Mutex<Vec<String>>>,
@@ -82,13 +77,6 @@ impl Transcriber for MockTranscriber {
             ],
             final_text: "来自语音输入".to_string(),
         })
-    }
-}
-
-impl TextInjector for MockTextInjector {
-    fn inject(&self, text: &str) -> Result<()> {
-        println!("已注入文本：{text}");
-        Ok(())
     }
 }
 
