@@ -3516,3 +3516,8 @@ git commit -m "refactor: 彻底精简收尾——验证通过"
   - 测试数从 27 降为 25（删除 2 个冗余测试），全绿。
   - 质量审查追加修复（e31fb69）：(1) `ModifierKey`/`HotkeyKind` 收敛为 `pub(crate)`、`kind()` 为 `pub(crate)`（原计划代码块的 `pub` 在私有模块中构成死表面；完全私有会触发 `private_interfaces` lint，故取 pub(crate)）；(2) `matches()` 补 doc comment 说明 DoublePress 分支严格语义与监听循环 has_any 的有意差异；(3) 补 2 个测试：全部双击别名变体（9 个 Ctrl + 3 个 Alt）与优先级（双击覆盖组合、后者覆盖前者）。
   - 审查者 Nit 跳过并记录：`set_combo_modifier`/`set_combo_key` 对 DoublePress 静默 no-op 的形状问题（建议 ComboSpec builder，超范围）；`matches()` doc comment「解析校验」措辞无对应调用点，宜改「测试」——后者归入 Task 10 收尾。
+- **Task 8 执行记录（commit f14a3d2，两阶段审查后补记）**：
+  - 无 spec 缺陷，一次通过规范审查（删除范围逐行核验：py 224 行、函数 161 行、case 6 行、usage 2 行；唯一新增行为 bootstrap 替换行）。
+  - 质量审查 Minor 记录待 Task 10 评估（不阻塞，计划 Step 5 明确指定的替换）：bootstrap --audio-file 复用 `voiceinput_linux_smoke_impl` 后经由其 dpkg-only 的 `voiceinput_ensure_linux_dev_deps`——非 Debian 系统会无条件 exit 2（旧内联 cargo 调用至少会尝试构建）；Debian 上 bootstrap 可能触发 sudo apt-get（旧路径不会）。目标平台为 Ubuntu 系，且对全新环境该预检反而更完善；manager-aware 改造属行为增强，超出「精简」范围。
+  - 质量审查 Nit 记录：历史设计文档 `docs/superpowers/specs/2026-06-29-linux-only-refactor-design.md:98` 仍列 `linux dev`/`linux dev-streaming`（历史文档，不改）。
+  - 磁盘上 `scripts/__pycache__/funasr_stream_server.cpython-38.pyc` 为被删文件的陈旧编译产物（gitignored、未被提交、惰性无害），Task 10 顺手从磁盘删除。
