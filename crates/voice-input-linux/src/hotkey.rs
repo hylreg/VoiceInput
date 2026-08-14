@@ -10,7 +10,7 @@ use device_query::{DeviceQuery, DeviceState, Keycode};
 use voice_input_core::{Result, VoiceInputError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModifierKey {
+pub(crate) enum ModifierKey {
     Ctrl,
     Alt,
 }
@@ -32,7 +32,7 @@ impl ModifierKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HotkeyKind {
+pub(crate) enum HotkeyKind {
     DoublePress(ModifierKey),
     Combo {
         key: Keycode,
@@ -111,10 +111,16 @@ impl LinuxHotkeySpec {
         })
     }
 
-    pub fn kind(&self) -> HotkeyKind {
+    pub(crate) fn kind(&self) -> HotkeyKind {
         self.kind
     }
 
+    /// 判断当前按下的按键集合是否满足热键。
+    ///
+    /// DoublePress 分支使用严格的 is_ctrl_only / is_alt_only 语义（仅修饰键
+    /// 按下才算命中），主要供解析校验与测试使用；监听循环中的 DoublePress
+    /// 检测改用 `ModifierKey::is_held`（has_any，容忍组合键），以避免 Ctrl+C
+    /// 等组合键释放非修饰键时产生虚假上升沿。两者差异是有意设计。
     pub fn matches(&self, keys: &[Keycode]) -> bool {
         match self.kind {
             HotkeyKind::DoublePress(ModifierKey::Ctrl) => is_ctrl_only(keys),
@@ -440,5 +446,45 @@ mod tests {
         assert!(spec.matches(&[Keycode::RAlt]));
         assert!(!spec.matches(&[Keycode::Space]));
         assert!(!spec.matches(&[Keycode::LAlt, Keycode::Space]));
+    }
+
+    #[test]
+    fn double_press_alias_variants_parse_to_same_kind() {
+        for alias in [
+            "DoubleCtrl",
+            "double-ctrl",
+            "double_ctrl",
+            "DoubleCtrlStrict",
+            "double-ctrl-strict",
+            "double_ctrl_strict",
+            "LongCtrl",
+            "long-ctrl",
+            "long_ctrl",
+        ] {
+            let spec = LinuxHotkeySpec::parse(alias).expect("parse alias");
+            assert_eq!(
+                spec.kind(),
+                HotkeyKind::DoublePress(ModifierKey::Ctrl),
+                "alias: {alias}"
+            );
+        }
+        for alias in ["DoubleAlt", "double-alt", "double_alt"] {
+            let spec = LinuxHotkeySpec::parse(alias).expect("parse alias");
+            assert_eq!(
+                spec.kind(),
+                HotkeyKind::DoublePress(ModifierKey::Alt),
+                "alias: {alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn double_press_token_wins_over_combo_and_last_wins() {
+        // 双击 token 覆盖组合 token（与旧代码 matches() 先查 double_* 的优先级一致）
+        let spec = LinuxHotkeySpec::parse("Ctrl+DoubleAlt").expect("parse");
+        assert_eq!(spec.kind(), HotkeyKind::DoublePress(ModifierKey::Alt));
+        // 退化输入：两个双击 token 时后者覆盖前者
+        let spec = LinuxHotkeySpec::parse("DoubleAlt+DoubleCtrl").expect("parse");
+        assert_eq!(spec.kind(), HotkeyKind::DoublePress(ModifierKey::Ctrl));
     }
 }
