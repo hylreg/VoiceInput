@@ -3530,3 +3530,7 @@ git commit -m "refactor: 彻底精简收尾——验证通过"
   - clippy 无法运行：组件未安装（`rustup component add clippy` 因 rustup 镜像 404 失败），以强制全量重建（含测试 harness、--features ibus）零警告替代。
   - 行数：`crates/*/src/*.rs + scripts/*.sh + README.md` 为 4154 行（基线 67b4223 同口径 5421，-23.4%；含 2 个剩余 Python 脚本为 4683 vs 6174）。计划预估 6486→4500 的口径不同（含更多文件类型），实际同口径减少约 1/4。
   - Task 8 记录的非 Debian dpkg 检查问题维持不改（超出「精简」范围的行为增强），在 README 中未宣称跨发行版支持。
+- **最终全量审查与收尾修复（commit d135b8e + ef90ff1）**：
+  - 全量审查（范围 e74a1ea..f07ac2d）裁决 Ready to merge: Yes，无 Critical/Important；跨任务一致性确认通过（PCM 端到端、热键别名、ASR 环境/配置一致、CLI 面一致、默认值一致、测试删除与抽象删除对应）。
+  - 审查遗留 2 Minor + 3 Nit 全部修复：(1) Minor——`describe_activation_hotkey` 字符串比较漏 LongCtrl/long-ctrl/long_ctrl 三个合法别名，改为 `LinuxHotkeySpec::describe()` 从 HotkeyKind 枚举派生（DoublePress 统一标签、Combo 回退 raw 字符串），删除 runtime.rs 重复的别名清单，新增测试 `describe_labels_double_press_aliases_uniformly`；(2) Minor——非 ibus 构建的 `insert_text_into_active_window` 存根 fail-open 改 fail-closed（Err(Injection)），库调用者不再可能静默丢弃待提交文本；(3) Nit——host.rs `service_name` 死字段/访问器删除，`LinuxInputMethodHost` 改单元结构体（即 Task 5 记录「计划要求保留、后续任务评估去留」的收尾结论）；(4) Nit——脚本 3 处帮助文本 `--backend ibus|fcitx5` 改 `--backend ibus`（fcitx5 本就解析时拒绝）；(5) Nit——`required_packages` 删除 libdbus-1-dev/libibus-1.0-dev（对应 crate 已移除），README「六个编译库」改「四个」；修复者额外发现 install 帮助文本另有一处旧库名列举，一并更新。
+  - 复检（范围 809b9b0..ef90ff1）：5 项全部闭环，diff 恰为声明的 7 个文件、无范围外改动；`cargo test --workspace --features ibus` 28 passed，默认与 ibus 双 feature 强制重编译零警告，`bash -n` 通过。最终裁决 Ready。
