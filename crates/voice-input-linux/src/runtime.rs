@@ -91,6 +91,11 @@ fn build_linux_asr(config: &FunAsrConfig) -> Result<Box<dyn FunAsrRunner>> {
     Ok(Box::new(runner))
 }
 
+/// 填充词（如“嗯。”）不注入目标窗口，直接丢弃。
+fn is_filler_transcript(text: &str) -> bool {
+    matches!(text, "嗯" | "嗯。")
+}
+
 fn run_recording_cycle(
     recorder: &LinuxMicAudioRecorder,
     host: &LinuxInputMethodHost,
@@ -149,6 +154,13 @@ fn run_recording_cycle(
 
             if transcript.trim().is_empty() {
                 eprintln!("转写结果为空");
+                let _ = host.cancel_composition();
+                let _ = host.end_composition();
+                return Ok(false);
+            }
+
+            if is_filler_transcript(&transcript) {
+                eprintln!("识别结果为填充词，已丢弃：{transcript}");
                 let _ = host.cancel_composition();
                 let _ = host.end_composition();
                 return Ok(false);
@@ -268,4 +280,18 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_filler_transcript;
+
+    #[test]
+    fn filler_transcript_is_discarded() {
+        assert!(is_filler_transcript("嗯。"));
+        assert!(is_filler_transcript("嗯"));
+        assert!(!is_filler_transcript("嗯嗯"));
+        assert!(!is_filler_transcript("好的"));
+        assert!(!is_filler_transcript(""));
+    }
 }
