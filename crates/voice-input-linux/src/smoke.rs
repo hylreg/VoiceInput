@@ -7,7 +7,7 @@ use voice_input_core::{AudioRecorder, InputMethodHost, Transcriber};
 use crate::host::LinuxInputMethodHost;
 use crate::recorder::FileAudioRecorder;
 
-/// 读取 WAV 文件并转写，返回识别文本。独立纯函数，便于测试。
+/// 读取 WAV 文件并转写，返回识别文本。逻辑与提交解耦，便于测试。
 pub fn transcribe_file(
     audio_path: &Path,
     transcriber: &LocalFunAsrTranscriber,

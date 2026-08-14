@@ -118,7 +118,7 @@ impl LinuxHotkeySpec {
     /// 判断当前按下的按键集合是否满足热键。
     ///
     /// DoublePress 分支使用严格的 is_ctrl_only / is_alt_only 语义（仅修饰键
-    /// 按下才算命中），主要供解析校验与测试使用；监听循环中的 DoublePress
+    /// 按下才算命中），主要供测试使用；监听循环中的 DoublePress
     /// 检测改用 `ModifierKey::is_held`（has_any，容忍组合键），以避免 Ctrl+C
     /// 等组合键释放非修饰键时产生虚假上升沿。两者差异是有意设计。
     pub fn matches(&self, keys: &[Keycode]) -> bool {
