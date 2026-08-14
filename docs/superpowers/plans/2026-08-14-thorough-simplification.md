@@ -3524,3 +3524,9 @@ git commit -m "refactor: 彻底精简收尾——验证通过"
 - **Task 9 执行记录（commit f865481 + e1f3a13，两阶段审查后补记）**：
   - 替换内容逐字落地、事实核查全通过（模型 catalog/默认值、脚本子命令与 flag、main.rs 参数名、默认热键、systemd 单元名、requirements 文件），无偏差。
   - 质量审查追加修复（e1f3a13，均经协调者对照脚本核实）：(1) Important——脚本 `uv venv --python "$(command -v python3.12)"` 硬要求 Python ≥ 3.12 且无回退，README 原称 Ubuntu 20.04 一键安装（默认 3.8）会撞墙，补依赖说明并修正「可选」错误分类（6 个编译库实为脚本自动安装）；(2) `--audio-file` 实际只部署+smoke 后 exit 0（不装服务不启动），修正注释；(3) 命令入口补 bootstrap 前置说明；(4) 模型切换流程改「重新 linux install」（install 内部调 bootstrap）；(5) 表头「参数量」→「规模」；(6) systemctl 简写展开并补 disable（取消自启保留安装）。
+- **Task 10 执行记录（commit f07ac2d）**：
+  - 两处 doc comment 措辞修正落地（smoke.rs「纯函数」→「逻辑与提交解耦」；hotkey.rs「解析校验」→「测试」）；磁盘删除 gitignored 的 `scripts/__pycache__/funasr_stream_server.cpython-38.pyc`。
+  - 验证全绿：`cargo build/test --workspace` + `--features ibus` 27 测试通过、零警告；真实 smoke 成功（模型 Fun-ASR-Nano-2512，输出「识别结果：编输入法测试。」）；脚本语法与 --help 无 dev-streaming。
+  - clippy 无法运行：组件未安装（`rustup component add clippy` 因 rustup 镜像 404 失败），以强制全量重建（含测试 harness、--features ibus）零警告替代。
+  - 行数：`crates/*/src/*.rs + scripts/*.sh + README.md` 为 4154 行（基线 67b4223 同口径 5421，-23.4%；含 2 个剩余 Python 脚本为 4683 vs 6174）。计划预估 6486→4500 的口径不同（含更多文件类型），实际同口径减少约 1/4。
+  - Task 8 记录的非 Debian dpkg 检查问题维持不改（超出「精简」范围的行为增强），在 README 中未宣称跨发行版支持。
