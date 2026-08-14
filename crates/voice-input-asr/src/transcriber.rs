@@ -12,10 +12,6 @@ impl LocalFunAsrTranscriber {
         Self { config, runner }
     }
 
-    pub fn config(&self) -> &FunAsrConfig {
-        &self.config
-    }
-
     pub fn transcribe_allow_empty(&self, audio: &[u8]) -> Result<String> {
         self.runner.transcribe(FunAsrRequest {
             audio_bytes: audio.to_vec(),
@@ -30,7 +26,7 @@ impl Transcriber for LocalFunAsrTranscriber {
 
         if text.trim().is_empty() {
             return Err(VoiceInputError::Transcription(
-                "FunASR 没有返回识别文本，请检查麦克风输入、录音时长或环境噪声".to_string(),
+                "ASR 没有返回识别文本，请检查麦克风输入、录音时长或环境噪声".to_string(),
             ));
         }
 

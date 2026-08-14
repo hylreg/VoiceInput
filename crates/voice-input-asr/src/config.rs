@@ -1,5 +1,5 @@
+use std::collections::HashMap;
 use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -37,8 +37,8 @@ impl Default for AsrBackend {
 
 #[derive(Debug, Clone, Deserialize)]
 struct ModelCatalog {
-    aliases: std::collections::HashMap<String, String>,
-    models: std::collections::HashMap<String, ModelSpec>,
+    aliases: HashMap<String, String>,
+    models: HashMap<String, ModelSpec>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,7 +51,15 @@ struct ModelSpec {
     remote_code: String,
 }
 
+/// 编译期嵌入 config/models.json，模型配置单一来源。
 static MODEL_CATALOG: OnceLock<ModelCatalog> = OnceLock::new();
+
+fn load_catalog() -> &'static ModelCatalog {
+    MODEL_CATALOG.get_or_init(|| {
+        let json = include_str!("../../../config/models.json");
+        serde_json::from_str(json).expect("config/models.json should be valid")
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunAsrConfig {
@@ -90,130 +98,26 @@ impl FunAsrConfig {
         }
     }
 
-    fn builtin_catalog() -> ModelCatalog {
-        let catalog_json = r#"{
-            "aliases": {
-                "fun": "funasr",
-                "funasr": "funasr",
-                "qwen": "qwen",
-                "qwen3": "qwen",
-                "qwen-asr": "qwen",
-                "qwen-0.6b": "qwen-0.6b",
-                "qwen0.6b": "qwen-0.6b",
-                "qwen06": "qwen-0.6b",
-                "qwen3-0.6b": "qwen-0.6b",
-                "qwen3-asr-0.6b": "qwen-0.6b"
-            },
-            "models": {
-                "funasr": {
-                    "backend": "funasr",
-                    "model_id": "FunAudioLLM/Fun-ASR-Nano-2512",
-                    "source_url": "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512",
-                    "model_dir": "./models/FunAudioLLM/Fun-ASR-Nano-2512",
-                    "remote_code": "./models/FunAudioLLM/Fun-ASR-Nano-2512/model.py"
-                },
-                "qwen": {
-                    "backend": "qwen",
-                    "model_id": "Qwen/Qwen3-ASR-1.7B",
-                    "source_url": "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR",
-                    "model_dir": "./models/Qwen/Qwen3-ASR-1.7B",
-                    "remote_code": ""
-                },
-                "qwen-0.6b": {
-                    "backend": "qwen",
-                    "model_id": "Qwen/Qwen3-ASR-0.6B",
-                    "source_url": "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR",
-                    "model_dir": "./models/Qwen/Qwen3-ASR-0.6B",
-                    "remote_code": ""
-                }
-            }
-        }"#;
-        serde_json::from_str(catalog_json).expect("builtin model catalog should be valid")
-    }
-
-    fn config_catalog_path() -> Option<PathBuf> {
-        let mut current = env::current_dir().ok()?;
-        loop {
-            let candidate = current.join("config/models.json");
-            if candidate.exists() {
-                return Some(candidate);
-            }
-            if !current.pop() {
-                break;
-            }
-        }
-        None
-    }
-
-    fn load_catalog() -> ModelCatalog {
-        MODEL_CATALOG
-            .get_or_init(|| {
-                let Some(path) = Self::config_catalog_path() else {
-                    return Self::builtin_catalog();
-                };
-
-                let Ok(content) = fs::read_to_string(path) else {
-                    return Self::builtin_catalog();
-                };
-
-                serde_json::from_str(&content).unwrap_or_else(|_| Self::builtin_catalog())
-            })
-            .clone()
-    }
-
+    /// 按别名查 catalog。catalog 是编译期嵌入的，三个内置模型必然存在。
     fn model_spec_by_alias(alias: &str) -> Option<ModelSpec> {
-        let catalog = Self::load_catalog();
+        let catalog = load_catalog();
         let normalized = catalog.aliases.get(&alias.trim().to_ascii_lowercase())?;
         catalog.models.get(normalized).cloned()
     }
 
     pub fn funasr_default() -> Self {
-        Self::model_spec_by_alias("funasr")
-            .map(|spec| Self::from_spec(&spec))
-            .unwrap_or_else(|| Self {
-                backend: AsrBackend::FunAsr,
-                model_id: "FunAudioLLM/Fun-ASR-Nano-2512".to_string(),
-                source_url: "https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512"
-                    .to_string(),
-                model_dir: PathBuf::from("./models/FunAudioLLM/Fun-ASR-Nano-2512"),
-                remote_code: PathBuf::from("./models/FunAudioLLM/Fun-ASR-Nano-2512/model.py"),
-                device: "auto".to_string(),
-                language: "中文".to_string(),
-                itn: true,
-                hotwords: Vec::new(),
-            })
+        let spec = Self::model_spec_by_alias("funasr").expect("catalog 缺少 funasr");
+        Self::from_spec(&spec)
     }
 
     pub fn qwen3_asr_1_7b_default() -> Self {
-        Self::model_spec_by_alias("qwen")
-            .map(|spec| Self::from_spec(&spec))
-            .unwrap_or_else(|| Self {
-                backend: AsrBackend::QwenAsr,
-                model_id: "Qwen/Qwen3-ASR-1.7B".to_string(),
-                source_url: "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR".to_string(),
-                model_dir: PathBuf::from("./models/Qwen/Qwen3-ASR-1.7B"),
-                remote_code: PathBuf::new(),
-                device: "auto".to_string(),
-                language: "中文".to_string(),
-                itn: true,
-                hotwords: Vec::new(),
-            })
+        let spec = Self::model_spec_by_alias("qwen").expect("catalog 缺少 qwen");
+        Self::from_spec(&spec)
     }
 
     pub fn qwen3_asr_0_6b_default() -> Self {
-        Self::model_spec_by_alias("qwen-0.6b")
-            .map(|spec| Self::from_spec(&spec))
-            .unwrap_or_else(|| Self {
-                backend: AsrBackend::QwenAsr,
-                model_id: "Qwen/Qwen3-ASR-0.6B".to_string(),
-                source_url: "https://www.modelscope.cn/collections/Qwen/Qwen3-ASR".to_string(),
-                model_dir: PathBuf::from("./models/Qwen/Qwen3-ASR-0.6B"),
-                remote_code: PathBuf::new(),
-                device: "auto".to_string(),
-                language: "中文".to_string(),
-                itn: true,
-                hotwords: Vec::new(),
-            })
+        let spec = Self::model_spec_by_alias("qwen-0.6b").expect("catalog 缺少 qwen-0.6b");
+        Self::from_spec(&spec)
     }
 
     pub fn for_model_id(model_id: impl Into<String>) -> Self {
