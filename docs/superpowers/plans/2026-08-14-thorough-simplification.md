@@ -2194,6 +2194,10 @@ pub fn transcribe_file(
 }
 
 pub fn run_smoke(audio_path: PathBuf) -> Result<(), String> {
+    if cfg!(not(feature = "ibus")) {
+        return Err("当前构建未启用 IBus 支持，请使用 --features ibus 重新构建".to_string());
+    }
+
     let asr = FunAsrConfig::from_env();
     let runner = PythonFunAsrRunner::connect(asr.clone())
         .map_err(|err| format!("预加载 ASR 模型失败：{err}"))?;
@@ -2229,6 +2233,7 @@ impl InputMethodHost for LinuxInputMethodHost {
 
     fn commit_text(&self, text: &str) -> Result<()> {
         crate::ibus::insert_text_into_active_window(text, None)
+            .map_err(|e| VoiceInputError::Injection(format!("Linux 文本提交失败：{e}")))
     }
 
     fn cancel_composition(&self) -> Result<()> {
@@ -3491,3 +3496,7 @@ git commit -m "refactor: 彻底精简收尾——验证通过"
   - Task 5 后 `LiveJobHandle` 不再导出（lib.rs Step 10），runtime.rs Step 9 同步删除 import。
   - 已消除顺序耦合：Task 2 的 transcriber 保持返回 `Transcript`（Task 5 Step 5 才切 String），Task 4 一步内同时删除 backend.rs 与改写 main.rs，每个任务结束时编译绿色。
 - **真实性核验**：所有「替换」步骤的 old_string 均与当前磁盘代码逐字一致（本计划编写时已逐一 Read 核验：config.rs/ime.rs/platform.rs/lib.rs/controller.rs/local.rs/smoke.rs/main.rs/live_cli.rs/runtime.rs/host.rs/ibus.rs/backend.rs/tray.rs/recorder.rs/hotkey.rs/session.rs/funasr.rs/transcriber.rs/runner.rs/file.rs/silence.rs/wav.rs/pcm.rs/Cargo.toml/models.json/voiceinput.sh/README.md）。
+- **Task 4 执行记录（commit 669973a + 3bfbf96，两阶段审查后补记）**：
+  - Step 3 的 ibus.rs 代码块中 `debug_xdotool!`/`debug_timestamp`/`DEBUG_START` 位于文件末尾——Rust `macro_rules!` 必须先于使用，执行时移至文件顶部（内容不变）。
+  - Step 3 的 `#[cfg(not(feature = "ibus"))]` 块缺少 `insert_text_into_active_window` 存根，而 host.rs 无条件调用它，无 feature 构建无法编译——执行时补齐与其余两个存根一致的 no-op 存根。
+  - 质量审查追加修复（3bfbf96）：`run_smoke` 无 ibus feature 时明确报错（已同步写入 Task 5 Step 7 代码块；Task 6 Step 9 只改 import 与 `transcribe_file`，不触碰 `run_smoke`）；补 `validate_backend`（6 例）与 `parse_smoke_args`（4 例）单测；`host.commit_text` 恢复「Linux 文本提交失败：{err}」错误上下文（已同步写入 Task 5 Step 8 代码块）。
