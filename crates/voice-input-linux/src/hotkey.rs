@@ -286,6 +286,77 @@ fn is_alt_only(keys: &[Keycode]) -> bool {
             .all(|key| matches!(key, Keycode::LAlt | Keycode::RAlt))
 }
 
+/// 两次触发的冷却时间，避免三连击等场景在短时间内的重复触发。
+const TRIGGER_COOLDOWN: Duration = Duration::from_millis(800);
+
+/// 双击修饰键的边沿检测状态机。
+///
+/// 触发时机在第二次按下的**释放沿**，而不是按下沿。触发后主循环会立刻
+/// 通过 xdotool --clearmodifiers 注入文本（● 提示符、退格等）；若在按下沿
+/// 触发，注入会发生在用户仍按住修饰键时。xdotool 的 --clearmodifiers
+/// 流程是「假松开修饰键 → 注入 → 假按下还原修饰键」，它与用户随后物理
+/// 松开修饰键存在竞态：物理松开若落在假松开与还原之间，还原会把修饰键
+/// 重新按下且之后没有释放事件，导致修饰键在系统里被永久卡住（表现为
+/// Ctrl 一直被按下，任何后续按键都带上 Ctrl 修饰位）。
+///
+/// 改为释放沿触发后，任何注入开始时修饰键都已物理松开，竞态窗口不复
+/// 存在；这也与鼠标双击（第二次松开才触发）的语义一致。
+struct DoublePressDetector {
+    window: Duration,
+    cooldown: Duration,
+    last_trigger_at: Option<Instant>,
+    last_release: Option<Instant>,
+    was_held: bool,
+    /// 第二次按下已满足双击间隔条件，等待释放沿触发
+    armed: bool,
+}
+
+impl DoublePressDetector {
+    fn new(window: Duration) -> Self {
+        Self {
+            window,
+            cooldown: TRIGGER_COOLDOWN,
+            last_trigger_at: None,
+            last_release: None,
+            was_held: false,
+            armed: false,
+        }
+    }
+
+    /// 输入一次按键轮询结果，在「双击的第二次释放沿」返回 true 表示应触发。
+    fn observe(&mut self, held: bool, now: Instant) -> bool {
+        let mut triggered = false;
+        let in_cooldown = self
+            .last_trigger_at
+            .map(|last| now.duration_since(last) <= self.cooldown)
+            .unwrap_or(false);
+
+        if held && !self.was_held {
+            // 按下沿：满足双击间隔则武装，等释放沿再触发
+            if !in_cooldown {
+                if let Some(release_time) = self.last_release {
+                    if now.duration_since(release_time) <= self.window {
+                        self.armed = true;
+                    }
+                }
+            }
+        } else if !held && self.was_held {
+            // 释放沿：武装状态下在此触发
+            if self.armed {
+                self.armed = false;
+                self.last_trigger_at = Some(now);
+                self.last_release = None;
+                triggered = true;
+            } else {
+                self.last_release = Some(now);
+            }
+        }
+
+        self.was_held = held;
+        triggered
+    }
+}
+
 pub struct LinuxHotkeyWatcher {
     receiver: mpsc::Receiver<()>,
     stop: Arc<AtomicBool>,
@@ -305,11 +376,9 @@ impl LinuxHotkeyWatcher {
 
         let handle = thread::spawn(move || {
             let device = DeviceState::new();
+            let mut detector = DoublePressDetector::new(double_press_window);
             let mut last_trigger_at: Option<Instant> = None;
-            let mut last_release: Option<Instant> = None;
-            let mut was_held = false;
             let mut latched = false;
-            const TRIGGER_COOLDOWN: Duration = Duration::from_millis(800);
 
             while !stop_for_thread.load(Ordering::SeqCst) {
                 let keys = device.get_keys();
@@ -319,43 +388,25 @@ impl LinuxHotkeyWatcher {
                         // 使用 has_any 而不是 is_*_only 检测修饰键状态。
                         // is_*_only 会在组合键（如 Ctrl+C）释放 C 时产生虚假的
                         // 上升沿（因为 Ctrl 再次变成"单独按下"），导致误触发。
+                        // 触发沿在第二次按下的释放沿，保证随后注入文本时修饰键
+                        // 已物理松开（见 DoublePressDetector 的说明）。
                         let held = modifier.is_held(&keys);
-                        let now = Instant::now();
-                        let in_cooldown = last_trigger_at
-                            .map(|last| now.duration_since(last) <= TRIGGER_COOLDOWN)
-                            .unwrap_or(false);
-
-                        if held && !was_held {
-                            // 修饰键刚按下
-                            if !in_cooldown {
-                                if let Some(release_time) = last_release {
-                                    if now.duration_since(release_time) <= double_press_window {
-                                        // 两次按下间隔在窗口内 → 触发
-                                        let label = modifier.label();
-                                        if active.is_active() {
-                                            if recorder.is_recording() {
-                                                eprintln!(
-                                                    "检测到双击 {label} 停止热键，正在结束录音..."
-                                                );
-                                                recorder.stop();
-                                            }
-                                        } else {
-                                            eprintln!(
-                                                "检测到双击 {label} 开始热键，正在启动录音..."
-                                            );
-                                            let _ = sender.send(());
-                                        }
-                                        last_trigger_at = Some(now);
-                                        last_release = None;
-                                    }
+                        if detector.observe(held, Instant::now()) {
+                            let label = modifier.label();
+                            if active.is_active() {
+                                if recorder.is_recording() {
+                                    eprintln!(
+                                        "检测到双击 {label} 停止热键，正在结束录音..."
+                                    );
+                                    recorder.stop();
                                 }
+                            } else {
+                                eprintln!(
+                                    "检测到双击 {label} 开始热键，正在启动录音..."
+                                );
+                                let _ = sender.send(());
                             }
-                        } else if !held && was_held {
-                            // 修饰键刚释放
-                            last_release = Some(now);
                         }
-
-                        was_held = held;
                     }
                     HotkeyKind::Combo { .. } => {
                         // 组合热键（Ctrl+Shift+Space 等）
@@ -514,5 +565,82 @@ mod tests {
         }
         let spec = LinuxHotkeySpec::parse("DoubleAlt").expect("parse");
         assert_eq!(spec.describe("DoubleAlt", window), "双击 Alt（严格，300ms）");
+    }
+
+    #[test]
+    fn double_press_triggers_on_second_release_edge() {
+        let mut det = DoublePressDetector::new(Duration::from_millis(300));
+        let t0 = Instant::now();
+        // 第一次按下/松开
+        assert!(!det.observe(true, t0));
+        assert!(!det.observe(false, t0 + Duration::from_millis(100)));
+        // 第二次按下：满足双击间隔，但必须在释放沿才触发（修复核心——
+        // 按下沿触发会让 xdotool 注入与用户物理松开修饰键竞态，卡住 Ctrl）
+        assert!(!det.observe(true, t0 + Duration::from_millis(200)));
+        // 第二次松开：触发
+        assert!(det.observe(false, t0 + Duration::from_millis(280)));
+    }
+
+    #[test]
+    fn single_press_does_not_trigger() {
+        let mut det = DoublePressDetector::new(Duration::from_millis(300));
+        let t0 = Instant::now();
+        assert!(!det.observe(true, t0));
+        assert!(!det.observe(false, t0 + Duration::from_millis(100)));
+    }
+
+    #[test]
+    fn press_after_window_expiry_does_not_trigger() {
+        let mut det = DoublePressDetector::new(Duration::from_millis(300));
+        let t0 = Instant::now();
+        assert!(!det.observe(true, t0));
+        assert!(!det.observe(false, t0 + Duration::from_millis(100)));
+        // 第二次按下超出双击间隔窗口（400ms > 300ms）
+        assert!(!det.observe(true, t0 + Duration::from_millis(500)));
+        assert!(!det.observe(false, t0 + Duration::from_millis(600)));
+    }
+
+    #[test]
+    fn held_second_press_waits_for_release() {
+        let mut det = DoublePressDetector::new(Duration::from_millis(300));
+        let t0 = Instant::now();
+        assert!(!det.observe(true, t0));
+        assert!(!det.observe(false, t0 + Duration::from_millis(100)));
+        // 第二次按下后长时间按住：只要不松开就不触发
+        assert!(!det.observe(true, t0 + Duration::from_millis(200)));
+        assert!(!det.observe(true, t0 + Duration::from_secs(3)));
+        // 松开才触发
+        assert!(det.observe(false, t0 + Duration::from_secs(3) + Duration::from_millis(10)));
+    }
+
+    #[test]
+    fn cooldown_blocks_follow_up_pair() {
+        let mut det = DoublePressDetector::new(Duration::from_millis(300));
+        let t0 = Instant::now();
+        assert!(!det.observe(true, t0));
+        assert!(!det.observe(false, t0 + Duration::from_millis(100)));
+        assert!(!det.observe(true, t0 + Duration::from_millis(200)));
+        assert!(det.observe(false, t0 + Duration::from_millis(280)));
+        // 冷却期内再来一组双击：不应触发
+        assert!(!det.observe(true, t0 + Duration::from_millis(300)));
+        assert!(!det.observe(false, t0 + Duration::from_millis(400)));
+        assert!(!det.observe(true, t0 + Duration::from_millis(500)));
+        assert!(!det.observe(false, t0 + Duration::from_millis(580)));
+    }
+
+    #[test]
+    fn new_pair_after_cooldown_triggers() {
+        let mut det = DoublePressDetector::new(Duration::from_millis(300));
+        let t0 = Instant::now();
+        assert!(!det.observe(true, t0));
+        assert!(!det.observe(false, t0 + Duration::from_millis(100)));
+        assert!(!det.observe(true, t0 + Duration::from_millis(200)));
+        assert!(det.observe(false, t0 + Duration::from_millis(280)));
+        // 冷却期（800ms）结束后的新双击可以正常触发
+        let t1 = t0 + Duration::from_millis(1100);
+        assert!(!det.observe(true, t1));
+        assert!(!det.observe(false, t1 + Duration::from_millis(100)));
+        assert!(!det.observe(true, t1 + Duration::from_millis(200)));
+        assert!(det.observe(false, t1 + Duration::from_millis(280)));
     }
 }
