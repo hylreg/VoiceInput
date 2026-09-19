@@ -202,7 +202,17 @@ impl SystemImeController {
 ```
 
 `request()` 执行 `ibus restart`，失败时返回错误字符串由托盘层 `eprintln!`。
-`ibus restart` 会先停后起 daemon，命令本身同步返回。
+
+**实测语义（2026-09-19，IBus 1.5.22）：** `ibus restart` 并不替换 ibus-daemon 进程。
+strace 显示它只是向 `/org/freedesktop/IBus` 发 `Exit(true)`：地址文件 guid 会变、
+抽象 socket 换成新名字，但 daemon PID 保持不变（300 次高频轮询也未捕捉到瞬态新进程）。
+`ibus-daemon` 里 `--restart` 标志的说明是 "restart panel and config processes when they die"，
+指的是重启 panel/config **子进程**，而非 daemon 自身。
+
+因此这一项的实际效果是「重置 ibus 总线连接」，而不是「重启输入法进程」。
+对「输入法卡住」的使用场景，重置总线通常足以恢复，故保留官方命令；
+若将来需要真正换 PID，得自己 kill 再拉起 daemon，且 gnome-shell 不一定自动接管，
+风险更高，本次不做。
 
 ### 修改 `crates/voice-input-linux/src/tray.rs`
 
@@ -235,8 +245,8 @@ StandardItem {
 - 可用 / 不可用时的标签与 enabled 状态
 - `request()` 在不可用时返回错误且不执行命令
 
-真机验证：点一次「重启系统输入法」，`pgrep -a ibus-daemon` 的 PID 应变化，
-VoiceInput 自身 MainPID 应保持不变。
+真机验证（2026-09-19 已执行）：点「重启系统输入法」后地址文件 guid 变化、
+VoiceInput 自身 MainPID 保持不变。daemon PID 不变，原因见上「实测语义」。
 
 ## 不做的事
 

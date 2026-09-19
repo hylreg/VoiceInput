@@ -785,6 +785,15 @@ systemctl --user show voice-input.service -p MainPID
 
 Expected: `ibus-daemon` 的 PID 变化；VoiceInput 的 MainPID **不变**。
 
+**实测结果（2026-09-19，IBus 1.5.22）：** 期望中的「ibus-daemon PID 变化」未出现。
+strace 显示 `ibus restart` 只是向 `/org/freedesktop/IBus` 发 `Exit(true)`——
+地址文件 guid 变化、抽象 socket 换名，但 daemon PID 不变。
+`--restart` 在 ibus-daemon 里指的是重启 panel/config 子进程，不是 daemon 自身。
+这一项的实际效果是「重置 ibus 总线连接」。经确认保留官方命令，不改为 kill + 拉起。
+
+实测确认的部分：菜单项显示正常且可点击；VoiceInput MainPID 保持不变（这是本项的
+关键约束，已验证）。
+
 ---
 
 ## Task 7: 托盘菜单新增「重启系统输入法」（ibus）
