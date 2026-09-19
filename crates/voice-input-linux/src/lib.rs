@@ -8,6 +8,7 @@ mod restart;
 mod runtime;
 mod settings;
 mod smoke;
+mod system_ime;
 mod tray;
 
 pub use host::LinuxInputMethodHost;
@@ -19,4 +20,5 @@ pub use restart::{cgroup_matches_unit, restart_command, RestartController, SERVI
 pub use runtime::{run_live_app, LinuxLiveAppConfig};
 pub use settings::{settings_path, LinuxAppSettings};
 pub use smoke::{run_smoke, transcribe_file};
+pub use system_ime::{names_contain_ibus_daemon, SystemImeController, IBUS_DAEMON_COMM};
 pub use tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
