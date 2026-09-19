@@ -41,6 +41,12 @@ pub fn restart_command(unit: &str, helper_unit: &str) -> Vec<String> {
     ]
 }
 
+/// 构造 transient helper unit 名。带 pid 与毫秒时间戳，
+/// 避免同一进程连续两次触发时重名。
+fn helper_unit_name(pid: u32, ts_millis: u128) -> String {
+    format!("voice-input-restart-{pid}-{ts_millis}")
+}
+
 /// 重启控制器的可用性由「当前进程是否跑在目标 systemd unit 里」决定。
 #[derive(Debug, Clone)]
 pub struct RestartController {
@@ -85,13 +91,12 @@ impl RestartController {
             ));
         };
 
-        let helper_unit = format!(
-            "voice-input-restart-{}-{}",
+        let helper_unit = helper_unit_name(
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0)
+                .map(|d| d.as_millis())
+                .unwrap_or(0),
         );
 
         let status = Command::new("systemd-run")
@@ -117,6 +122,14 @@ mod tests {
 1:name=systemd:/user.slice/user-1000.slice/user@1000.service/voice-input.service
 0::/user.slice/user-1000.slice/user@1000.service/voice-input.service
 ";
+
+    /// 构造一个「不可用」状态的控制器，供多个测试复用。
+    fn unavailable_controller() -> RestartController {
+        RestartController::from_cgroup_content(
+            "0::/user.slice/user@1000.service\n",
+            "voice-input.service",
+        )
+    }
 
     #[test]
     fn cgroup_v2_path_matches_unit() {
@@ -193,29 +206,38 @@ mod tests {
 
     #[test]
     fn controller_unavailable_when_cgroup_differs() {
-        let controller =
-            RestartController::from_cgroup_content("0::/user.slice/user@1000.service\n", "voice-input.service");
+        let controller = unavailable_controller();
 
         assert!(!controller.is_available());
     }
 
     #[test]
     fn unavailable_label_explains_requirement() {
-        let controller =
-            RestartController::from_cgroup_content("0::/user.slice/user@1000.service\n", "voice-input.service");
+        let controller = unavailable_controller();
 
         assert_eq!(controller.unavailable_label(), "（需 systemd 服务）");
     }
 
     #[test]
     fn request_fails_when_unavailable() {
-        let controller =
-            RestartController::from_cgroup_content("0::/user.slice/user@1000.service\n", "voice-input.service");
+        let controller = unavailable_controller();
 
         let err = controller.request().expect_err("不可用时应当报错");
         assert!(
             err.contains("systemd"),
             "错误信息应当提到 systemd，实际：{err}"
+        );
+    }
+
+    #[test]
+    fn helper_unit_name_is_unique_per_millisecond() {
+        assert_eq!(
+            helper_unit_name(42, 1700000000000),
+            "voice-input-restart-42-1700000000000"
+        );
+        assert_ne!(
+            helper_unit_name(42, 1700000000000),
+            helper_unit_name(42, 1700000000001)
         );
     }
 }
