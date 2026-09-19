@@ -4,8 +4,12 @@ use std::process::Command;
 pub const IBUS_DAEMON_COMM: &str = "ibus-daemon";
 
 /// 判断一组 comm 名里是否存在 ibus 主进程。
+///
+/// `/proc/<pid>/comm` 的内容带结尾换行，所以先去掉首尾空白再比较。
 pub fn names_contain_ibus_daemon<'a>(names: impl IntoIterator<Item = &'a str>) -> bool {
-    names.into_iter().any(|name| name == IBUS_DAEMON_COMM)
+    names
+        .into_iter()
+        .any(|name| name.trim() == IBUS_DAEMON_COMM)
 }
 
 /// 系统输入法（ibus）控制器。可用性由「是否有 ibus-daemon 在跑」决定。
@@ -100,6 +104,17 @@ mod tests {
     #[test]
     fn probe_does_not_match_prefix_comm() {
         assert!(!names_contain_ibus_daemon(["ibus-daemon-x"]));
+    }
+
+    /// `/proc/<pid>/comm` 内容带结尾换行，纯函数必须能吃下这种原始内容。
+    #[test]
+    fn probe_matches_newline_terminated_comm() {
+        assert!(names_contain_ibus_daemon(["ibus-daemon\n"]));
+    }
+
+    #[test]
+    fn probe_with_newline_terminated_others_does_not_match() {
+        assert!(!names_contain_ibus_daemon(["ibus-x11\n", "ibus-dconf\n"]));
     }
 
     #[test]
