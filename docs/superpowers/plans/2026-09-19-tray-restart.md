@@ -719,11 +719,24 @@ cargo fmt --all
 cargo clippy -p voice-input-linux --features ibus -- -D warnings
 ```
 
-Expected: fmt 无输出；clippy 无 warning。若 fmt 改动文件，一并提交：
+Expected: fmt 无输出；clippy 无 warning。
+
+**偏差记录（2026-09-19）：** 本机 `cargo-clippy` 组件缺失，`rustup component add clippy`
+因镜像 404 失败，clippy 步骤跳过。`cargo fmt --all` 会波及 5 个与本次功能无关的文件
+（`funasr.rs`、`hotkey.rs`、`ibus.rs`、`live_cli.rs`、`main.rs`，共 66 行既有格式漂移）。
+为避免把无关改动混进本次提交，改为只对本次功能涉及的文件做 fmt 检查：
 
 ```bash
-git add -A && git commit -m "style(voice-input-linux): rustfmt"
+cd /home/lab/Projects/VoiceInput
+rustfmt --check --edition 2021 \
+  crates/voice-input-linux/src/restart.rs \
+  crates/voice-input-linux/src/system_ime.rs \
+  crates/voice-input-linux/src/tray.rs \
+  crates/voice-input-linux/src/runtime.rs \
+  crates/voice-input-linux/src/lib.rs
 ```
+
+Expected: 无输出（说明这几个文件本来就已符合 rustfmt）。
 
 - [ ] **Step 2: 部署新二进制并重启服务**
 
@@ -758,6 +771,411 @@ cd /home/lab/Projects/VoiceInput
 
 Expected: 托盘菜单里该项显示为置灰的「重启输入法（需 systemd 服务）」，点击无反应。
 验证完 `Ctrl+C` 结束该进程，再 `systemctl --user start voice-input.service` 恢复。
+
+- [ ] **Step 5: 真机验证重启系统输入法**
+
+记录重启前的 ibus-daemon PID 与 VoiceInput MainPID：
+
+```bash
+pgrep -a ibus-daemon
+systemctl --user show voice-input.service -p MainPID
+```
+
+在托盘图标上右键 → 点「重启系统输入法」，然后重新执行上面两条命令。
+
+Expected: `ibus-daemon` 的 PID 变化；VoiceInput 的 MainPID **不变**。
+
+---
+
+## Task 7: 托盘菜单新增「重启系统输入法」（ibus）
+
+**Files:**
+- Create: `crates/voice-input-linux/src/system_ime.rs`
+- Modify: `crates/voice-input-linux/src/lib.rs`
+- Modify: `crates/voice-input-linux/src/tray.rs`
+- Modify: `crates/voice-input-linux/src/runtime.rs`
+- Test: `crates/voice-input-linux/src/system_ime.rs`（模块内 `#[cfg(test)]`）、`tray.rs` 既有测试模块
+
+设计依据：spec 的「追加需求：重启系统输入法（ibus 框架）」一节。
+
+- [ ] **Step 1: 在 lib.rs 声明模块**
+
+按字母序把 `mod system_ime;` 插到 `mod smoke;` 与 `mod tray;` 之间：
+
+```rust
+mod restart;
+mod runtime;
+mod settings;
+mod smoke;
+mod system_ime;
+mod tray;
+```
+
+在 `pub use smoke::{run_smoke, transcribe_file};` 之后加入导出：
+
+```rust
+pub use system_ime::{names_contain_ibus_daemon, SystemImeController, IBUS_DAEMON_COMM};
+```
+
+- [ ] **Step 2: 写失败的测试**
+
+创建 `crates/voice-input-linux/src/system_ime.rs`，只写常量、签名（`todo!()` 占位）与测试：
+
+```rust
+/// ibus 主进程的 comm 名（/proc/<pid>/comm 截断到 15 字节，此名未超限）。
+pub const IBUS_DAEMON_COMM: &str = "ibus-daemon";
+
+/// 判断一组 comm 名里是否存在 ibus 主进程。
+pub fn names_contain_ibus_daemon<'a>(names: impl IntoIterator<Item = &'a str>) -> bool {
+    todo!()
+}
+
+#[derive(Debug, Clone)]
+pub struct SystemImeController {
+    available: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_with_daemon_matches() {
+        assert!(names_contain_ibus_daemon(["ibus-daemon"]));
+    }
+
+    #[test]
+    fn probe_with_daemon_among_others_matches() {
+        assert!(names_contain_ibus_daemon([
+            "gnome-shell",
+            "ibus-daemon",
+            "ibus-x11",
+        ]));
+    }
+
+    #[test]
+    fn probe_with_only_child_processes_does_not_match() {
+        assert!(!names_contain_ibus_daemon(["ibus-dconf", "ibus-x11", "ibus-portal"]));
+    }
+
+    #[test]
+    fn probe_with_empty_list_does_not_match() {
+        assert!(!names_contain_ibus_daemon([] as [&str; 0]));
+    }
+
+    #[test]
+    fn probe_does_not_match_prefix_comm() {
+        assert!(!names_contain_ibus_daemon(["ibus-daemon-x"]));
+    }
+}
+```
+
+- [ ] **Step 3: 运行测试确认失败**
+
+Run: `cargo test -p voice-input-linux system_ime:: --features ibus`
+Expected: 5 个测试全部 FAIL，panic 信息为 `not yet implemented`
+
+- [ ] **Step 4: 写最小实现**
+
+把 `names_contain_ibus_daemon` 的 `todo!()` 替换为：
+
+```rust
+pub fn names_contain_ibus_daemon<'a>(names: impl IntoIterator<Item = &'a str>) -> bool {
+    names.into_iter().any(|name| name == IBUS_DAEMON_COMM)
+}
+```
+
+在文件顶部加入 use：
+
+```rust
+use std::process::Command;
+```
+
+在 `names_contain_ibus_daemon` 之后插入：
+
+```rust
+/// 系统输入法（ibus）控制器。可用性由「是否有 ibus-daemon 在跑」决定。
+#[derive(Debug, Clone)]
+pub struct SystemImeController {
+    available: bool,
+}
+
+impl SystemImeController {
+    /// 扫描 `/proc/*/comm` 做检测。
+    ///
+    /// 不用 `ibus address` 探测：daemon 卡死时该 D-Bus 调用会阻塞到超时（约 25 秒），
+    /// 而探测发生在 `menu()` 里，会把托盘线程挂住。
+    pub fn detect() -> Self {
+        let names = std::fs::read_dir("/proc")
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let comm = entry.path().join("comm");
+                std::fs::read_to_string(comm).ok()
+            })
+            .collect::<Vec<_>>();
+        let refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+        Self::from_probe(&refs)
+    }
+
+    /// 从给定 comm 名列表构造，便于单测。
+    pub fn from_probe(names: &[&str]) -> Self {
+        Self {
+            available: names_contain_ibus_daemon(names.iter().copied()),
+        }
+    }
+
+    pub fn is_available(&self) -> bool {
+        self.available
+    }
+
+    /// 不可用时拼在菜单标签后面的后缀。
+    pub fn unavailable_label(&self) -> &'static str {
+        "（未检测到 ibus）"
+    }
+
+    /// 调用 `ibus restart` 重启系统输入法。不影响 VoiceInput 自身。
+    pub fn request(&self) -> Result<(), String> {
+        if !self.available {
+            return Err("未检测到 ibus，无法重启系统输入法".to_string());
+        }
+
+        let status = Command::new("ibus")
+            .arg("restart")
+            .status()
+            .map_err(|e| format!("执行 ibus restart 失败：{e}"))?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("ibus restart 返回非零退出码：{status}"))
+        }
+    }
+}
+```
+
+- [ ] **Step 5: 运行测试确认通过**
+
+Run: `cargo test -p voice-input-linux system_ime:: --features ibus`
+Expected: 5 passed
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add crates/voice-input-linux/src/system_ime.rs crates/voice-input-linux/src/lib.rs
+git commit -m "feat(voice-input-linux): 新增 SystemImeController 检测与重启 ibus"
+```
+
+---
+
+## Task 8: 托盘菜单接入「重启系统输入法」
+
+**Files:**
+- Modify: `crates/voice-input-linux/src/tray.rs`
+- Modify: `crates/voice-input-linux/src/runtime.rs`
+
+- [ ] **Step 1: 给配置与托盘加字段**
+
+`tray.rs` 的 `mod linux_tray` 内 use 区，在 `use crate::restart::RestartController;` 之后加入：
+
+```rust
+    use crate::system_ime::SystemImeController;
+```
+
+`LinuxTrayConfig` 增加字段（放在 `restart_requested` 之后）：
+
+```rust
+        pub ime: SystemImeController,
+```
+
+`impl LinuxTrayConfig` 的 `new` 增加第 7 个参数 `ime: SystemImeController` 并写入字段：
+
+```rust
+        pub fn new(
+            service_name: impl Into<String>,
+            title: impl Into<String>,
+            recorder: LinuxMicAudioRecorder,
+            quit_requested: Arc<AtomicBool>,
+            restart: RestartController,
+            restart_requested: Arc<AtomicBool>,
+            ime: SystemImeController,
+        ) -> Self {
+            Self {
+                service_name: service_name.into(),
+                title: title.into(),
+                recorder,
+                quit_requested,
+                restart,
+                restart_requested,
+                ime,
+            }
+        }
+```
+
+`LinuxTray` 结构体增加字段：
+
+```rust
+        ime: SystemImeController,
+```
+
+`LinuxTray::new` 对应补充：
+
+```rust
+                ime: config.ime,
+```
+
+- [ ] **Step 2: 写失败的测试**
+
+在 `impl LinuxTray` 里 `restart_enabled` 之后加入方法：
+
+```rust
+        fn ime_label(&self) -> String {
+            if self.ime.is_available() {
+                "重启系统输入法".to_string()
+            } else {
+                format!("重启系统输入法{}", self.ime.unavailable_label())
+            }
+        }
+
+        fn ime_enabled(&self) -> bool {
+            self.ime.is_available() && !self.recording
+        }
+```
+
+在 `tray.rs` 测试模块里，把 `tray_with` 改为接受 ibus 状态并补上 `ime` 字段：
+
+```rust
+        fn tray_with(cgroup: &str, recording: bool, ibus_running: bool) -> LinuxTray {
+            let restart = RestartController::from_cgroup_content(cgroup, "voice-input.service");
+            let ime = if ibus_running {
+                SystemImeController::from_probe(&["ibus-daemon"])
+            } else {
+                SystemImeController::from_probe(&["ibus-x11"])
+            };
+            LinuxTray {
+                service_name: "voice-input".to_string(),
+                title: "VoiceInput".to_string(),
+                recording,
+                recorder: LinuxMicAudioRecorder::new(Duration::from_secs(30)),
+                quit_requested: Arc::new(AtomicBool::new(false)),
+                restart,
+                restart_requested: Arc::new(AtomicBool::new(false)),
+                ime,
+            }
+        }
+```
+
+既有 5 个测试的调用点同步补第三个参数（均为 `true`，ibus 状态与它们无关）：
+
+```rust
+        let tray = tray_with(MATCHING, false, true);
+        let tray = tray_with("0::/user.slice/user@1000.service\n", false, true);
+        let tray = tray_with(MATCHING, true, true);
+```
+
+再追加四个新测试：
+
+```rust
+        #[test]
+        fn ime_label_is_plain_when_available() {
+            let tray = tray_with(MATCHING, false, true);
+            assert_eq!(tray.ime_label(), "重启系统输入法");
+        }
+
+        #[test]
+        fn ime_label_explains_when_unavailable() {
+            let tray = tray_with(MATCHING, false, false);
+            assert_eq!(tray.ime_label(), "重启系统输入法（未检测到 ibus）");
+        }
+
+        #[test]
+        fn ime_disabled_when_unavailable() {
+            let tray = tray_with(MATCHING, false, false);
+            assert!(!tray.ime_enabled());
+        }
+
+        #[test]
+        fn ime_disabled_while_recording() {
+            let tray = tray_with(MATCHING, true, true);
+            assert!(!tray.ime_enabled());
+        }
+```
+
+- [ ] **Step 3: 运行测试确认失败**
+
+Run: `cargo test -p voice-input-linux tray:: --features ibus`
+Expected: 编译失败，`no method named ime_label found`
+
+- [ ] **Step 4: 在 menu() 里插入菜单项**
+
+在重启项之后、第二个 `items.push(MenuItem::Separator);` 之前插入：
+
+```rust
+            items.push(
+                StandardItem {
+                    label: self.ime_label(),
+                    enabled: self.ime_enabled(),
+                    visible: true,
+                    icon_name: "input-keyboard".to_string(),
+                    activate: Box::new(|tray: &mut LinuxTray| {
+                        if let Err(err) = tray.ime.request() {
+                            eprintln!("重启系统输入法失败：{err}");
+                        }
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+```
+
+关键：这个闭包**不**设置 `restart_requested`——重启系统输入法不应重启 VoiceInput 自身。
+
+- [ ] **Step 5: runtime 传入控制器**
+
+`runtime.rs` 顶部 use 区加入：
+
+```rust
+use crate::system_ime::SystemImeController;
+```
+
+在 `let restart = RestartController::detect();` 之后加入：
+
+```rust
+    let ime = SystemImeController::detect();
+```
+
+`spawn_linux_tray` 调用补上第 7 个参数：
+
+```rust
+        let tray = spawn_linux_tray(LinuxTrayConfig::new(
+            config.service_name.clone(),
+            "VoiceInput".to_string(),
+            recorder.clone(),
+            Arc::clone(&quit_requested),
+            restart,
+            Arc::clone(&restart_requested),
+            ime,
+        ))?;
+```
+
+- [ ] **Step 6: 运行测试确认通过**
+
+Run: `cargo test -p voice-input-linux tray:: --features ibus`
+Expected: 9 passed（原有 5 个 + 新增 4 个）
+
+Run: `cargo test -p voice-input-linux --features ibus`
+Expected: 全部通过
+
+Run: `cargo build -p voice-input-linux --features ibus --release`
+Expected: 编译成功
+
+- [ ] **Step 7: 提交**
+
+```bash
+git add crates/voice-input-linux/src/tray.rs crates/voice-input-linux/src/runtime.rs
+git commit -m "feat(voice-input-linux): 托盘菜单新增重启系统输入法项"
+```
 
 ---
 

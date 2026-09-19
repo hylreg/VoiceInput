@@ -5,7 +5,8 @@
 ## 目标
 
 在 VoiceInput 常驻托盘的右键菜单里增加一个「重启输入法」项，一键重启 VoiceInput 常驻服务，
-用于热键失灵、ASR worker 卡死、双击 Ctrl 没反应等场合。不涉及系统输入法（ibus-daemon）。
+用于热键失灵、ASR worker 卡死、双击 Ctrl 没反应等场合。另有一项「重启系统输入法」
+重启 ibus-daemon，用于输入法框架本身卡住时，详见「追加需求」一节。
 
 ## 现状
 
@@ -149,8 +150,96 @@ StandardItem {
 真机验证：点一次菜单项，`journalctl --user -u voice-input.service -f` 应看到旧实例退出、
 新实例完成 ASR 预加载；`systemctl --user status voice-input.service` 的 MainPID 应变化。
 
+## 追加需求：重启系统输入法（ibus 框架）
+
+### 菜单变更
+
+在「重启输入法」之后追加一项「重启系统输入法」，两项之间不插分隔符（同属重启类操作）。
+
+- 检测到 ibus：标签「重启系统输入法」，可用
+- 未检测到：标签「重启系统输入法（未检测到 ibus）」，置灰
+- 录音进行中同样置灰
+
+与「重启输入法」的关键区别：这一项**只重启 ibus-daemon，不重启 VoiceInput 自身**，
+因此点击后**不**设置 `restart_requested`，主循环不受影响。
+
+### 为什么不用 `ibus address` 探测
+
+`ibus address` 走 D-Bus 查询。daemon 卡死时该调用会一直阻塞到 D-Bus 超时（约 25 秒），
+而探测发生在 `menu()` 里——会把托盘线程挂住。改用扫描 `/proc/*/comm`：
+纯文件读、无阻塞、无副作用。
+
+匹配规则：comm 名等于 `ibus-daemon`。实测本机存在两个 ibus-daemon
+（`lab` 用户的 `ibus-daemon -drx`，以及 `--panel disable --xim` 的无头实例），
+只要有一个在跑就认为 ibus 可用。
+
+### 代码落点
+
+新增 `crates/voice-input-linux/src/system_ime.rs`，结构与 `restart.rs` 对称：
+
+```rust
+/// ibus 主进程的 comm 名（/proc/<pid>/comm 截断到 15 字节，此名未超限）。
+pub const IBUS_DAEMON_COMM: &str = "ibus-daemon";
+
+/// 判断一组 comm 名里是否存在 ibus 主进程。
+pub fn names_contain_ibus_daemon<'a>(names: impl IntoIterator<Item = &'a str>) -> bool;
+
+pub struct SystemImeController {
+    available: bool,
+}
+
+impl SystemImeController {
+    /// 扫描 /proc/*/comm 做检测。
+    pub fn detect() -> Self;
+    /// 从给定 comm 名列表构造，便于单测。
+    pub fn from_probe(names: &[&str]) -> Self;
+    pub fn is_available(&self) -> bool;
+    /// 不可用时拼在菜单标签后面的后缀。
+    pub fn unavailable_label(&self) -> &'static str;  // "（未检测到 ibus）"
+    /// 调用 `ibus restart`。
+    pub fn request(&self) -> Result<(), String>;
+}
+```
+
+`request()` 执行 `ibus restart`，失败时返回错误字符串由托盘层 `eprintln!`。
+`ibus restart` 会先停后起 daemon，命令本身同步返回。
+
+### 修改 `crates/voice-input-linux/src/tray.rs`
+
+- `LinuxTrayConfig` / `LinuxTray` 增加 `ime: SystemImeController` 字段
+- `LinuxTray` 增加 `ime_label()` 与 `ime_enabled()`，与 `restart_label()` / `restart_enabled()` 对称
+- `menu()` 在重启项之后插入：
+
+```rust
+StandardItem {
+    label: self.ime_label(),
+    enabled: self.ime_enabled(),
+    icon_name: "input-keyboard".to_string(),
+    activate: Box::new(|tray: &mut LinuxTray| {
+        if let Err(err) = tray.ime.request() {
+            eprintln!("重启系统输入法失败：{err}");
+        }
+    }),
+    ..Default::default()
+}
+```
+
+### 修改 `crates/voice-input-linux/src/runtime.rs`
+
+构造 `SystemImeController::detect()` 并作为第 7 个参数传给 `LinuxTrayConfig::new`。
+
+### 测试策略
+
+- comm 列表含 `ibus-daemon` 时命中；只含 `ibus-dconf` / `ibus-x11` 等子进程时不命中
+- 空列表不命中
+- 可用 / 不可用时的标签与 enabled 状态
+- `request()` 在不可用时返回错误且不执行命令
+
+真机验证：点一次「重启系统输入法」，`pgrep -a ibus-daemon` 的 PID 应变化，
+VoiceInput 自身 MainPID 应保持不变。
+
 ## 不做的事
 
-- 不重启 ibus-daemon 或任何系统输入法进程
 - 不支持手动 `cargo run` 启动场景的重启（该场景下菜单项直接置灰）
 - 不改 systemd unit 文件、不改安装脚本、不改 CLI 参数
+- 不支持 fcitx 等非 ibus 框架（未检测到 ibus 时置灰）
