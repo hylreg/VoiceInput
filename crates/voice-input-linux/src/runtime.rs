@@ -6,14 +6,15 @@ use std::time::Duration;
 
 use crate::host::LinuxInputMethodHost;
 use crate::hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
+use crate::ibus::{backspace_in_active_window, insert_indicator_and_save_clipboard};
+use crate::live::{print_live_ready, LiveJobState};
 use crate::recorder::LinuxMicAudioRecorder;
+use crate::restart::RestartController;
 use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
 use fs2::FileExt;
 use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber, PythonFunAsrRunner};
-use voice_input_core::{AppConfig, InputMethodHost, Result, VoiceInputError};
 use voice_input_audio::{has_peak_above, write_pcm_wav};
-use crate::live::{print_live_ready, LiveJobState};
-use crate::ibus::{backspace_in_active_window, insert_indicator_and_save_clipboard};
+use voice_input_core::{AppConfig, InputMethodHost, Result, VoiceInputError};
 
 #[derive(Debug, Clone)]
 pub struct LinuxLiveAppConfig {
@@ -147,10 +148,7 @@ fn run_recording_cycle(
             }
 
             let wav = write_pcm_wav(&audio.samples, audio.sample_rate)?;
-            let transcript = transcriber
-                .transcribe_allow_empty(&wav)?
-                .trim()
-                .to_string();
+            let transcript = transcriber.transcribe_allow_empty(&wav)?.trim().to_string();
 
             if transcript.trim().is_empty() {
                 eprintln!("转写结果为空");
@@ -200,6 +198,8 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
     let active = Arc::new(LiveJobState::default());
     let active_for_watcher = Arc::clone(&active);
     let quit_requested = Arc::new(AtomicBool::new(false));
+    let restart_requested = Arc::new(AtomicBool::new(false));
+    let restart = RestartController::detect();
     let activation_hotkey = config.app.activation_hotkey.clone();
     let hotkey = LinuxHotkeySpec::parse(&activation_hotkey)?;
     let watcher = LinuxHotkeyWatcher::spawn(
@@ -219,6 +219,8 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
             "VoiceInput".to_string(),
             recorder.clone(),
             Arc::clone(&quit_requested),
+            restart,
+            Arc::clone(&restart_requested),
         ))?;
         tray.set_recording(false);
         Some(tray)
@@ -249,7 +251,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
     );
 
     loop {
-        if quit_requested.load(Ordering::SeqCst) {
+        if quit_requested.load(Ordering::SeqCst) || restart_requested.load(Ordering::SeqCst) {
             watcher.stop();
             break;
         }
