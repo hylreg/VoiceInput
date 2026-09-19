@@ -128,9 +128,6 @@ mod tests {
         let controller = SystemImeController::from_probe(&[]);
 
         let err = controller.request().expect_err("不可用时应当报错");
-        assert!(
-            err.contains("ibus"),
-            "错误信息应当提到 ibus，实际：{err}"
-        );
+        assert!(err.contains("ibus"), "错误信息应当提到 ibus，实际：{err}");
     }
 }
