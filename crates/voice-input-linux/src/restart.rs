@@ -1,3 +1,6 @@
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 /// VoiceInput 常驻服务的 systemd 用户 unit 名。
 pub const SERVICE_UNIT: &str = "voice-input.service";
 
@@ -36,6 +39,72 @@ pub fn restart_command(unit: &str, helper_unit: &str) -> Vec<String> {
         "restart".to_string(),
         unit.to_string(),
     ]
+}
+
+/// 重启控制器的可用性由「当前进程是否跑在目标 systemd unit 里」决定。
+#[derive(Debug, Clone)]
+pub struct RestartController {
+    unit: Option<String>,
+}
+
+impl RestartController {
+    /// 读取 `/proc/self/cgroup` 做检测。读不到时视为不可用。
+    pub fn detect() -> Self {
+        let unit = SERVICE_UNIT;
+        match std::fs::read_to_string("/proc/self/cgroup") {
+            Ok(content) => Self::from_cgroup_content(&content, unit),
+            Err(_) => Self { unit: None },
+        }
+    }
+
+    /// 从给定 cgroup 内容构造，便于单测。
+    pub fn from_cgroup_content(content: &str, unit: &str) -> Self {
+        if cgroup_matches_unit(content, unit) {
+            Self {
+                unit: Some(unit.to_string()),
+            }
+        } else {
+            Self { unit: None }
+        }
+    }
+
+    pub fn is_available(&self) -> bool {
+        self.unit.is_some()
+    }
+
+    /// 不可用时拼在菜单标签后面的后缀。
+    pub fn unavailable_label(&self) -> &'static str {
+        "（需 systemd 服务）"
+    }
+
+    /// 发起重启。成功返回后调用方应当走正常退出路径。
+    pub fn request(&self) -> Result<(), String> {
+        let Some(unit) = self.unit.as_deref() else {
+            return Err(format!(
+                "当前进程不在 {SERVICE_UNIT} 的 systemd 服务中，无法重启输入法"
+            ));
+        };
+
+        let helper_unit = format!(
+            "voice-input-restart-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        );
+
+        let status = Command::new("systemd-run")
+            .args(restart_command(unit, &helper_unit))
+            .status()
+            .map_err(|e| format!("执行 systemd-run 失败：{e}"))?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("systemd-run 返回非零退出码：{status}"))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -113,5 +182,40 @@ mod tests {
         let args = restart_command("other.service", "helper");
 
         assert_eq!(args.last().map(String::as_str), Some("other.service"));
+    }
+
+    #[test]
+    fn controller_available_when_cgroup_matches() {
+        let controller = RestartController::from_cgroup_content(V2_MATCH, "voice-input.service");
+
+        assert!(controller.is_available());
+    }
+
+    #[test]
+    fn controller_unavailable_when_cgroup_differs() {
+        let controller =
+            RestartController::from_cgroup_content("0::/user.slice/user@1000.service\n", "voice-input.service");
+
+        assert!(!controller.is_available());
+    }
+
+    #[test]
+    fn unavailable_label_explains_requirement() {
+        let controller =
+            RestartController::from_cgroup_content("0::/user.slice/user@1000.service\n", "voice-input.service");
+
+        assert_eq!(controller.unavailable_label(), "（需 systemd 服务）");
+    }
+
+    #[test]
+    fn request_fails_when_unavailable() {
+        let controller =
+            RestartController::from_cgroup_content("0::/user.slice/user@1000.service\n", "voice-input.service");
+
+        let err = controller.request().expect_err("不可用时应当报错");
+        assert!(
+            err.contains("systemd"),
+            "错误信息应当提到 systemd，实际：{err}"
+        );
     }
 }
