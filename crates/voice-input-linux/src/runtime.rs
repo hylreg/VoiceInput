@@ -10,6 +10,7 @@ use crate::ibus::{backspace_in_active_window, insert_indicator_and_save_clipboar
 use crate::live::{print_live_ready, LiveJobState};
 use crate::recorder::LinuxMicAudioRecorder;
 use crate::restart::RestartController;
+use crate::system_ime::SystemImeController;
 use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
 use fs2::FileExt;
 use voice_input_asr::{FunAsrConfig, FunAsrRunner, LocalFunAsrTranscriber, PythonFunAsrRunner};
@@ -200,6 +201,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
     let quit_requested = Arc::new(AtomicBool::new(false));
     let restart_requested = Arc::new(AtomicBool::new(false));
     let restart = RestartController::detect();
+    let ime = SystemImeController::detect();
     let activation_hotkey = config.app.activation_hotkey.clone();
     let hotkey = LinuxHotkeySpec::parse(&activation_hotkey)?;
     let watcher = LinuxHotkeyWatcher::spawn(
@@ -221,6 +223,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
             Arc::clone(&quit_requested),
             restart,
             Arc::clone(&restart_requested),
+            ime,
         ))?;
         tray.set_recording(false);
         Some(tray)

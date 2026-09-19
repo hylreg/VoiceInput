@@ -8,6 +8,7 @@ mod linux_tray {
 
     use crate::recorder::LinuxMicAudioRecorder;
     use crate::restart::RestartController;
+    use crate::system_ime::SystemImeController;
     use voice_input_core::{Result, VoiceInputError};
 
     #[derive(Debug, Clone)]
@@ -18,6 +19,7 @@ mod linux_tray {
         pub quit_requested: Arc<AtomicBool>,
         pub restart: RestartController,
         pub restart_requested: Arc<AtomicBool>,
+        pub ime: SystemImeController,
     }
 
     impl LinuxTrayConfig {
@@ -28,6 +30,7 @@ mod linux_tray {
             quit_requested: Arc<AtomicBool>,
             restart: RestartController,
             restart_requested: Arc<AtomicBool>,
+            ime: SystemImeController,
         ) -> Self {
             Self {
                 service_name: service_name.into(),
@@ -36,6 +39,7 @@ mod linux_tray {
                 quit_requested,
                 restart,
                 restart_requested,
+                ime,
             }
         }
     }
@@ -93,6 +97,7 @@ mod linux_tray {
         quit_requested: Arc<AtomicBool>,
         restart: RestartController,
         restart_requested: Arc<AtomicBool>,
+        ime: SystemImeController,
     }
 
     impl LinuxTray {
@@ -105,6 +110,7 @@ mod linux_tray {
                 quit_requested: config.quit_requested,
                 restart: config.restart,
                 restart_requested: config.restart_requested,
+                ime: config.ime,
             }
         }
 
@@ -134,6 +140,18 @@ mod linux_tray {
 
         fn restart_enabled(&self) -> bool {
             self.restart.is_available() && !self.recording
+        }
+
+        fn ime_label(&self) -> String {
+            if self.ime.is_available() {
+                "重启系统输入法".to_string()
+            } else {
+                format!("重启系统输入法{}", self.ime.unavailable_label())
+            }
+        }
+
+        fn ime_enabled(&self) -> bool {
+            self.ime.is_available() && !self.recording
         }
     }
 
@@ -226,6 +244,22 @@ mod linux_tray {
                 .into(),
             );
 
+            items.push(
+                StandardItem {
+                    label: self.ime_label(),
+                    enabled: self.ime_enabled(),
+                    visible: true,
+                    icon_name: "input-keyboard".to_string(),
+                    activate: Box::new(|tray: &mut LinuxTray| {
+                        if let Err(err) = tray.ime.request() {
+                            eprintln!("重启系统输入法失败：{err}");
+                        }
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+
             items.push(MenuItem::Separator);
 
             items.push(
@@ -259,12 +293,18 @@ mod linux_tray {
         use super::LinuxTray;
         use crate::recorder::LinuxMicAudioRecorder;
         use crate::restart::RestartController;
+        use crate::system_ime::SystemImeController;
         use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
         use std::time::Duration;
 
-        fn tray_with(cgroup: &str, recording: bool) -> LinuxTray {
+        fn tray_with(cgroup: &str, recording: bool, ibus_running: bool) -> LinuxTray {
             let restart = RestartController::from_cgroup_content(cgroup, "voice-input.service");
+            let ime = if ibus_running {
+                SystemImeController::from_probe(&["ibus-daemon"])
+            } else {
+                SystemImeController::from_probe(&["ibus-x11"])
+            };
             LinuxTray {
                 service_name: "voice-input".to_string(),
                 title: "VoiceInput".to_string(),
@@ -273,6 +313,7 @@ mod linux_tray {
                 quit_requested: Arc::new(AtomicBool::new(false)),
                 restart,
                 restart_requested: Arc::new(AtomicBool::new(false)),
+                ime,
             }
         }
 
@@ -281,32 +322,62 @@ mod linux_tray {
 
         #[test]
         fn restart_label_is_plain_when_available() {
-            let tray = tray_with(MATCHING, false);
+            let tray = tray_with(MATCHING, false, true);
             assert_eq!(tray.restart_label(), "重启输入法");
         }
 
         #[test]
         fn restart_label_explains_when_unavailable() {
-            let tray = tray_with("0::/user.slice/user@1000.service\n", false);
+            let tray = tray_with("0::/user.slice/user@1000.service\n", false, true);
             assert_eq!(tray.restart_label(), "重启输入法（需 systemd 服务）");
         }
 
         #[test]
         fn restart_disabled_when_unavailable() {
-            let tray = tray_with("0::/user.slice/user@1000.service\n", false);
+            let tray = tray_with("0::/user.slice/user@1000.service\n", false, true);
             assert!(!tray.restart_enabled());
         }
 
         #[test]
         fn restart_disabled_while_recording() {
-            let tray = tray_with(MATCHING, true);
+            let tray = tray_with(MATCHING, true, true);
             assert!(!tray.restart_enabled());
         }
 
         #[test]
         fn restart_enabled_when_available_and_idle() {
-            let tray = tray_with(MATCHING, false);
+            let tray = tray_with(MATCHING, false, true);
             assert!(tray.restart_enabled());
+        }
+
+        #[test]
+        fn ime_label_is_plain_when_available() {
+            let tray = tray_with(MATCHING, false, true);
+            assert_eq!(tray.ime_label(), "重启系统输入法");
+        }
+
+        #[test]
+        fn ime_label_explains_when_unavailable() {
+            let tray = tray_with(MATCHING, false, false);
+            assert_eq!(tray.ime_label(), "重启系统输入法（未检测到 ibus）");
+        }
+
+        #[test]
+        fn ime_disabled_when_unavailable() {
+            let tray = tray_with(MATCHING, false, false);
+            assert!(!tray.ime_enabled());
+        }
+
+        #[test]
+        fn ime_disabled_while_recording() {
+            let tray = tray_with(MATCHING, true, true);
+            assert!(!tray.ime_enabled());
+        }
+
+        #[test]
+        fn ime_enabled_when_available_and_idle() {
+            let tray = tray_with(MATCHING, false, true);
+            assert!(tray.ime_enabled());
         }
     }
 }
