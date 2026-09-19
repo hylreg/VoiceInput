@@ -10,14 +10,15 @@ pub fn cgroup_matches_unit(cgroup_content: &str, unit: &str) -> bool {
     let suffix = format!("/{unit}");
 
     cgroup_content.lines().any(|line| {
-        // v1 行形如 `1:name=systemd:/path`，v2 行形如 `0::/path`；
-        // 两种情况取最后一个 ':' 之后的部分即路径。
-        let path = match line.rfind(':') {
-            Some(idx) => &line[idx + 1..],
+        // 每行规范格式为 `hierarchy-ID:controller-list:cgroup-path`，
+        // 前两个字段不含 ':'；按字段切 3 段取第三段，
+        // 路径本身含 ':' 时也能完整保留。
+        let path = match line.splitn(3, ':').nth(2) {
+            Some(path) => path,
             None => line,
         };
 
-        path == suffix || path.ends_with(&suffix)
+        path.ends_with(&suffix)
     })
 }
 
@@ -65,5 +66,11 @@ mod tests {
     #[test]
     fn empty_content_does_not_match() {
         assert!(!cgroup_matches_unit("", "voice-input.service"));
+    }
+
+    #[test]
+    fn unit_name_with_colon_in_path_still_matches() {
+        let content = "0::/user.slice/user-1000.slice/voice:input.service\n";
+        assert!(cgroup_matches_unit(content, "voice:input.service"));
     }
 }
