@@ -22,6 +22,22 @@ pub fn cgroup_matches_unit(cgroup_content: &str, unit: &str) -> bool {
     })
 }
 
+/// 构造 `systemd-run` helper 的参数列表（不含 `systemd-run` 本身）。
+///
+/// helper 跑在独立 transient unit 里，因此不会被 restart 的 SIGTERM 波及。
+/// `--collect` 保证 helper 结束后自动回收，不残留 failed unit。
+pub fn restart_command(unit: &str, helper_unit: &str) -> Vec<String> {
+    vec![
+        "--user".to_string(),
+        "--collect".to_string(),
+        format!("--unit={helper_unit}"),
+        "systemctl".to_string(),
+        "--user".to_string(),
+        "restart".to_string(),
+        unit.to_string(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +88,30 @@ mod tests {
     fn unit_name_with_colon_in_path_still_matches() {
         let content = "0::/user.slice/user-1000.slice/voice:input.service\n";
         assert!(cgroup_matches_unit(content, "voice:input.service"));
+    }
+
+    #[test]
+    fn restart_command_uses_systemd_run_transient_unit() {
+        let args = restart_command("voice-input.service", "voice-input-restart-42-1700000000");
+
+        assert_eq!(
+            args,
+            vec![
+                "--user",
+                "--collect",
+                "--unit=voice-input-restart-42-1700000000",
+                "systemctl",
+                "--user",
+                "restart",
+                "voice-input.service",
+            ]
+        );
+    }
+
+    #[test]
+    fn restart_command_targets_given_unit() {
+        let args = restart_command("other.service", "helper");
+
+        assert_eq!(args.last().map(String::as_str), Some("other.service"));
     }
 }

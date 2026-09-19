@@ -15,7 +15,7 @@ pub use hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
 pub use live::LiveJobState;
 pub use live_cli::{parse_live_args, run_live_with_args, validate_backend, LinuxLiveArgs};
 pub use recorder::{FileAudioRecorder, LinuxMicAudioRecorder};
-pub use restart::{cgroup_matches_unit, SERVICE_UNIT};
+pub use restart::{cgroup_matches_unit, restart_command, SERVICE_UNIT};
 pub use runtime::{run_live_app, LinuxLiveAppConfig};
 pub use settings::{settings_path, LinuxAppSettings};
 pub use smoke::{run_smoke, transcribe_file};
