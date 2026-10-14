@@ -604,7 +604,7 @@ pub fn route(method: &str, path: &str) -> Route {
 
 Run: `cargo test -p voice-input-linux bridge_http::tests`
 
-Expected: `test result: ok. 31 passed`
+Expected: `test result: ok. 30 passed`
 
 - [ ] **Step 5: 提交**
 
