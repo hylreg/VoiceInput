@@ -474,7 +474,7 @@ pub fn parse_head(head: &str) -> Result<RequestHead, String> {
 
 Run: `cargo test -p voice-input-linux bridge_http::tests`
 
-Expected: `test result: ok. 22 passed`
+Expected: `test result: ok. 21 passed`
 
 - [ ] **Step 5: 提交**
 
