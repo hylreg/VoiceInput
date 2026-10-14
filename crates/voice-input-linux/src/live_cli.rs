@@ -42,10 +42,9 @@ pub fn run_live_with_args(args: LinuxLiveArgs) -> Result<(), String> {
         println!("静音自动停录已提升到更保守的下限：1500ms");
     }
 
-    let settings = LinuxAppSettings {
-        double_press_window_ms: effective_window_ms,
-        silence_stop_timeout_ms: effective_silence_stop_ms,
-    };
+    let mut settings = persisted_settings;
+    settings.double_press_window_ms = effective_window_ms;
+    settings.silence_stop_timeout_ms = effective_silence_stop_ms;
     if let Err(err) = settings.save() {
         eprintln!("保存 Linux 配置失败：{err}");
     }
