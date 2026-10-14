@@ -9,6 +9,7 @@ ibus = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.8"
 voice-input-audio = { path = "../voice-input-audio" }
 voice-input-asr = { path = "../voice-input-asr" }
