@@ -286,8 +286,10 @@ mod linux_tray {
             format!("复制外部输入地址（{}）", self.bridge_port)
         }
 
+        /// 只在端口绑定失败时置灰——此时地址没有意义（规范「开关语义」）。
+        /// IP 探测失败仍保持可点：回落到 127.0.0.1 是本机自测页面用不上的唯一手段。
         fn copy_address_enabled(&self) -> bool {
-            self.bridge_available && self.local_ip.is_some()
+            self.bridge_available
         }
 
         /// 地址在点击时现算——网卡是 DHCP 动态的，IP 会变。
@@ -414,6 +416,13 @@ mod linux_tray {
                             eprintln!("复制外部输入地址失败：没有可用地址");
                             return;
                         };
+                        // IP 探测失败时地址回落到 127.0.0.1：手机打不开，但本机浏览器
+                        // 能验证页面是否正常。提示必须先于写剪贴板打印，才能在写失败时也看到。
+                        if tray.local_ip.is_none() {
+                            eprintln!(
+                                "外部输入地址：未探测到局域网 IP，已回退到 127.0.0.1（仅供本机浏览器验证）"
+                            );
+                        }
                         match crate::ibus::restore_clipboard_text(&url) {
                             // 日志不记 URL 内容——里面含 token。
                             Ok(()) => println!("外部输入地址已复制到剪贴板"),
@@ -698,10 +707,11 @@ mod linux_tray {
         }
 
         #[test]
-        fn copy_address_disabled_when_ip_unknown() {
+        fn copy_address_stays_enabled_when_ip_unknown() {
+            // 规范：置灰只看端口绑定，IP 探测失败仍可点，回落到本机自测地址。
             let tray = tray_with_bridge(MATCHING, false, true, true, true, None);
 
-            assert!(!tray.copy_address_enabled());
+            assert!(tray.copy_address_enabled());
         }
 
         #[test]
