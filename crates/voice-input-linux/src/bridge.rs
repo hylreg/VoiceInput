@@ -17,6 +17,13 @@ use voice_input_core::{Result, VoiceInputError};
 /// 单个连接的读写超时，避免半个连接占死线程。
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// 读取整条请求头的总时限。每次 `read_line` 都会重置 socket 读超时，
+/// 所以只看 `SOCKET_TIMEOUT` 的话，对端每 <5s 滴一个字节就能把 worker
+/// 永久占住；而 `MAX_CONNECTIONS` 的判定排在鉴权之前，8 条这样的连接
+/// 就能让所有正当请求一直吃 429。监听绑在 0.0.0.0（tailnet 可达），
+/// 所以再加一道整条请求的截止时间。
+const HEAD_READ_DEADLINE: Duration = Duration::from_secs(5);
+
 /// 等待主循环回票的超时。主循环每 250ms 排空一次队列，2s 余量充足。
 const ACK_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -214,27 +221,76 @@ fn handle_connection(
     stream.set_write_timeout(Some(SOCKET_TIMEOUT))?;
 
     let mut reader = BufReader::new(stream.try_clone()?);
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line)? == 0 {
-        return Ok(());
-    }
+    let head = match read_head(&mut reader, Instant::now() + HEAD_READ_DEADLINE)? {
+        HeadRead::TimedOut => return write_head_timeout_response(stream),
+        HeadRead::Complete(head) => head,
+    };
 
-    // 逐行读头，直到空行。
-    let mut head = request_line;
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
-            break;
-        }
-        let is_end = line == "\r\n" || line == "\n";
-        head.push_str(&line);
-        if is_end {
-            break;
-        }
+    // 连上就断（唤醒 accept 用的空连接）或对端关闭：没什么可回的。
+    if head.is_empty() {
+        return Ok(());
     }
 
     let response = build_response(&head, &mut reader, status, sender);
     stream.write_all(response.render().as_bytes())?;
+    stream.flush()
+}
+
+/// 请求头读取结果。
+enum HeadRead {
+    /// 读到了完整的头（含终止空行；对端提前关闭时是已读到的部分）。
+    Complete(String),
+    /// 到截止时间还没读完。
+    TimedOut,
+}
+
+/// 读一条请求的头（到空行为止），整条读取受 `deadline` 约束。
+///
+/// 这里刻意不用 `read_line`：它内部会反复重试底层 read，而每次 read 都会
+/// 拿到一个全新的 socket 读超时窗口，对端每 <5s 滴一个字节就能把它永久挂住。
+/// 改成 `fill_buf`/`consume` 每次只取一个字节，外层每取一字节就能查一次
+/// 截止时间，整条请求因此有了真正的上界。
+fn read_head(reader: &mut impl BufRead, deadline: Instant) -> std::io::Result<HeadRead> {
+    let mut bytes: Vec<u8> = Vec::new();
+    loop {
+        if Instant::now() >= deadline {
+            return Ok(HeadRead::TimedOut);
+        }
+
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            // 对端关闭。已读到的部分照常交出去走解析失败路径。
+            return Ok(HeadRead::Complete(
+                String::from_utf8_lossy(&bytes).into_owned(),
+            ));
+        }
+        bytes.push(chunk[0]);
+        reader.consume(1);
+
+        if ends_with_blank_line(&bytes) {
+            return Ok(HeadRead::Complete(
+                String::from_utf8_lossy(&bytes).into_owned(),
+            ));
+        }
+    }
+}
+
+/// 判断累积的头字节是否已经以「空行」结束。
+fn ends_with_blank_line(bytes: &[u8]) -> bool {
+    bytes == b"\r\n" || bytes == b"\n" || bytes.ends_with(b"\r\n\r\n") || bytes.ends_with(b"\n\n")
+}
+
+/// 请求头没能在 `HEAD_READ_DEADLINE` 内读完时的回应。
+///
+/// 复用与畸形请求同一条路径的 400：`bridge_http::reason_phrase` 没有 408 的
+/// 原因短语，凭空加一个状态码只会让页面拿到「Unknown」。
+fn write_head_timeout_response(mut stream: TcpStream) -> std::io::Result<()> {
+    stream.set_write_timeout(Some(SOCKET_TIMEOUT))?;
+    stream.write_all(
+        HttpResponse::error(400, "请求头读取超时")
+            .render()
+            .as_bytes(),
+    )?;
     stream.flush()
 }
 
@@ -334,5 +390,99 @@ fn handle_send(
         Ok(Ok(())) => HttpResponse::ok_json(),
         Ok(Err(message)) => HttpResponse::error(500, &format!("{MSG_INJECT_FAILED}：{message}")),
         Err(_) => HttpResponse::error(503, MSG_TIMEOUT),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一个每次只按脚本吐字节的读取端，模拟点滴式发送。
+    struct DripReader {
+        chunk: Vec<u8>,
+        consumed: bool,
+    }
+
+    impl std::io::Read for DripReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            // 每次只给一个字节，逼调用方反复 fill_buf。
+            if self.consumed || buf.is_empty() {
+                return Ok(0);
+            }
+            buf[0] = self.chunk.remove(0);
+            self.consumed = self.chunk.is_empty();
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn reads_head_until_blank_line() {
+        let mut reader =
+            std::io::BufReader::new(&b"GET / HTTP/1.1\r\nHost: x\r\n\r\nbody-ignored"[..]);
+
+        let head = match read_head(&mut reader, Instant::now() + Duration::from_secs(5)) {
+            Ok(HeadRead::Complete(head)) => head,
+            _ => panic!("应当在截止时间前读完"),
+        };
+
+        assert_eq!(head, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        // 空行之后的请求体没有被吞掉，后续 read_exact 仍能读到。
+        let mut body = String::new();
+        use std::io::Read as _;
+        reader.read_to_string(&mut body).unwrap();
+        assert_eq!(body, "body-ignored");
+    }
+
+    #[test]
+    fn read_head_times_out_when_deadline_already_passed() {
+        // 截止时间已过时必须立刻返回 TimedOut，不能再去读。
+        let mut reader = std::io::BufReader::new(&b"GET / HTTP/1.1\r\n"[..]);
+
+        let result = read_head(&mut reader, Instant::now() - Duration::from_secs(1));
+
+        assert!(matches!(result, Ok(HeadRead::TimedOut)));
+    }
+
+    #[test]
+    fn read_head_reports_eof_partial_head() {
+        // 对端发一半就关闭：把读到的部分交出去，走解析失败路径。
+        let mut reader = std::io::BufReader::new(&b"GET / HT"[..]);
+
+        let head = match read_head(&mut reader, Instant::now() + Duration::from_secs(5)) {
+            Ok(HeadRead::Complete(head)) => head,
+            _ => panic!("对端关闭应当收尾，而不是超时"),
+        };
+
+        assert_eq!(head, "GET / HT");
+    }
+
+    #[test]
+    fn read_head_handles_bare_newline_terminator() {
+        let mut reader = std::io::BufReader::new(&b"GET / HTTP/1.1\n\n"[..]);
+
+        let head = match read_head(&mut reader, Instant::now() + Duration::from_secs(5)) {
+            Ok(HeadRead::Complete(head)) => head,
+            _ => panic!("裸 LF 空行也应当终止读取"),
+        };
+
+        assert_eq!(head, "GET / HTTP/1.1\n\n");
+    }
+
+    #[test]
+    fn read_head_accepts_drip_reader() {
+        // 每次只给一个字节的读取端，逻辑上应当正常工作（真实场景里
+        // 由 deadline 兜住无限点滴；这里给足时间读完整条）。
+        let drip = b"POST /send HTTP/1.1\r\n\r\n".to_vec();
+        let mut reader = BufReader::new(DripReader {
+            chunk: drip,
+            consumed: false,
+        });
+
+        let head = match read_head(&mut reader, Instant::now() + Duration::from_secs(5)) {
+            Ok(HeadRead::Complete(head)) => head,
+            _ => panic!("应当读完"),
+        };
+
+        assert_eq!(head, "POST /send HTTP/1.1\r\n\r\n");
     }
 }

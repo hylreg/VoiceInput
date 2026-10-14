@@ -214,3 +214,43 @@ fn response_always_closes_connection() {
         "实际：{response}"
     );
 }
+
+#[test]
+fn dripping_header_is_cut_off_by_aggregate_deadline() {
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let mut stream = TcpStream::connect(addr.as_str()).expect("应当能连上桥接服务");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("设置读超时");
+    // 每 200ms 滴一个字节，单次 read 都远在 5s socket 读超时之内。
+    // 若只有 per-read 超时，这样发完 "GET / HTTP/1.1\r\nHost: x\r\nkey: "（26 字节）
+    // 要 5s 以上；整条请求的 5s 截止时间必须先把连接掐掉。
+    let drip = b"GET / HTTP/1.1\r\nHost: x\r\nkey: ";
+    let started = std::time::Instant::now();
+    let mut writer = stream.try_clone().expect("克隆流");
+    let drip_thread = std::thread::spawn(move || {
+        for byte in drip {
+            if writer.write_all(&[*byte]).is_err() {
+                // 服务端已经关掉连接，正常。
+                return;
+            }
+            let _ = writer.flush();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let elapsed = started.elapsed();
+    drip_thread.join().expect("发送线程应当正常结束");
+
+    assert!(
+        response.starts_with("HTTP/1.1 400 "),
+        "应当收到读取超时错误响应，实际：{response}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(8),
+        "整条请求的截止时间应当先于点滴发送完成触发，实际耗时 {elapsed:?}"
+    );
+}
