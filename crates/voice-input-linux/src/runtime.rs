@@ -1,15 +1,19 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::bridge::BridgeRequest;
+use crate::bridge_http::char_count;
 use crate::host::LinuxInputMethodHost;
 use crate::hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
 use crate::ibus::{backspace_in_active_window, insert_indicator_and_save_clipboard};
 use crate::live::{print_live_ready, LiveJobState};
 use crate::recorder::LinuxMicAudioRecorder;
 use crate::restart::RestartController;
+use crate::settings::LinuxAppSettings;
 use crate::system_ime::SystemImeController;
 use crate::tray::{spawn_linux_tray, LinuxTrayConfig, LinuxTrayHandle};
 use fs2::FileExt;
@@ -96,6 +100,42 @@ fn build_linux_asr(config: &FunAsrConfig) -> Result<Box<dyn FunAsrRunner>> {
 /// 填充词（如“嗯。”）不注入目标窗口，直接丢弃。
 fn is_filler_transcript(text: &str) -> bool {
     matches!(text, "嗯" | "嗯。")
+}
+
+/// 排空桥接队列并把每条文本注入当前光标。返回成功注入的条数。
+///
+/// 注入前保存剪贴板、注入后还原——`insert_text_into_active_window` 对非 ASCII
+/// 文本走剪贴板粘贴路径，不还原的话用户正在复制的内容会被手机文字覆盖。
+/// 这里不调 `insert_indicator_and_save_clipboard`：那会在光标处插一个 ●，
+/// 而用户在手机上，看不到也不需要。
+fn drain_bridge_requests(rx: &Receiver<BridgeRequest>, host: &dyn InputMethodHost) -> usize {
+    let mut injected = 0;
+
+    while let Ok(request) = rx.try_recv() {
+        let saved = crate::ibus::read_clipboard_text();
+        let result = host.commit_text(&request.text);
+        if let Some(previous) = crate::ibus::clipboard_text_to_restore(saved) {
+            if let Err(err) = crate::ibus::restore_clipboard_text(&previous) {
+                eprintln!("还原剪贴板失败：{err}");
+            }
+        }
+
+        // 日志只记长度与结果，不记内容——手机语音可能包含密码或私事。
+        match result {
+            Ok(()) => {
+                injected += 1;
+                println!("手机输入：已注入 {} 字", char_count(&request.text));
+                // 页面可能已经断开，回票失败不是错误。
+                let _ = request.reply.try_send(Ok(()));
+            }
+            Err(err) => {
+                eprintln!("手机输入注入失败：{err}");
+                let _ = request.reply.try_send(Err(err.to_string()));
+            }
+        }
+    }
+
+    injected
 }
 
 fn run_recording_cycle(
@@ -224,6 +264,13 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
             restart,
             Arc::clone(&restart_requested),
             ime,
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(AtomicBool::new(true)),
+            false,
+            8765,
+            String::new(),
+            None,
+            LinuxAppSettings::default(),
         ))?;
         tray.set_recording(false);
         Some(tray)
@@ -289,7 +336,10 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_filler_transcript;
+    use super::*;
+    use std::cell::RefCell;
+    use std::sync::mpsc;
+    use voice_input_core::InputMethodHost;
 
     #[test]
     fn filler_transcript_is_discarded() {
@@ -298,5 +348,117 @@ mod tests {
         assert!(!is_filler_transcript("嗯嗯"));
         assert!(!is_filler_transcript("好的"));
         assert!(!is_filler_transcript(""));
+    }
+
+    /// 记录收到的文本，用于断言注入内容。
+    #[derive(Default)]
+    struct RecordingHost {
+        committed: RefCell<Vec<String>>,
+        fail: bool,
+    }
+
+    impl InputMethodHost for RecordingHost {
+        fn start_composition(&self) -> voice_input_core::Result<()> {
+            Ok(())
+        }
+
+        fn commit_text(&self, text: &str) -> voice_input_core::Result<()> {
+            if self.fail {
+                return Err(voice_input_core::VoiceInputError::Injection(
+                    "模拟注入失败".to_string(),
+                ));
+            }
+            self.committed.borrow_mut().push(text.to_string());
+            Ok(())
+        }
+
+        fn cancel_composition(&self) -> voice_input_core::Result<()> {
+            Ok(())
+        }
+
+        fn end_composition(&self) -> voice_input_core::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn drains_all_queued_requests() {
+        let host = RecordingHost::default();
+        let (tx, rx) = mpsc::sync_channel(8);
+        let mut replies = Vec::new();
+        for text in ["第一条", "第二条", "第三条"] {
+            let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+            tx.try_send(BridgeRequest {
+                text: text.to_string(),
+                reply: reply_tx,
+            })
+            .expect("入队应当成功");
+            replies.push(reply_rx);
+        }
+
+        let injected = drain_bridge_requests(&rx, &host);
+
+        assert_eq!(injected, 3);
+        assert_eq!(
+            host.committed.borrow().clone(),
+            vec!["第一条", "第二条", "第三条"]
+        );
+        for reply in replies {
+            assert!(reply.try_recv().expect("每条都应当回票").is_ok());
+        }
+    }
+
+    #[test]
+    fn empty_queue_injects_nothing() {
+        let host = RecordingHost::default();
+        let (_tx, rx) = mpsc::sync_channel::<BridgeRequest>(8);
+
+        assert_eq!(drain_bridge_requests(&rx, &host), 0);
+        assert!(host.committed.borrow().is_empty());
+    }
+
+    #[test]
+    fn injection_failure_is_reported_but_does_not_stop_the_drain() {
+        let host = RecordingHost {
+            fail: true,
+            ..Default::default()
+        };
+        let (tx, rx) = mpsc::sync_channel(8);
+        let mut replies = Vec::new();
+        for text in ["甲", "乙"] {
+            let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+            tx.try_send(BridgeRequest {
+                text: text.to_string(),
+                reply: reply_tx,
+            })
+            .expect("入队应当成功");
+            replies.push(reply_rx);
+        }
+
+        let injected = drain_bridge_requests(&rx, &host);
+
+        assert_eq!(injected, 0, "失败的不计入成功数");
+        for reply in replies {
+            assert!(
+                reply.try_recv().expect("失败也要回票").is_err(),
+                "失败必须回票，否则页面只能干等到超时"
+            );
+        }
+    }
+
+    #[test]
+    fn disconnected_reply_does_not_panic() {
+        // 手机提前断开时回票会失败，主循环不能因此崩溃。
+        let host = RecordingHost::default();
+        let (tx, rx) = mpsc::sync_channel(8);
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        drop(reply_rx);
+        tx.try_send(BridgeRequest {
+            text: "内容".to_string(),
+            reply: reply_tx,
+        })
+        .expect("入队应当成功");
+
+        assert_eq!(drain_bridge_requests(&rx, &host), 1);
     }
 }
