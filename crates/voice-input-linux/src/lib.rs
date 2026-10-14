@@ -1,3 +1,4 @@
+mod bridge_http;
 mod host;
 mod hotkey;
 mod ibus;
