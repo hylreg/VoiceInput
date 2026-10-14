@@ -15,8 +15,8 @@ mod smoke;
 mod system_ime;
 mod tray;
 
-pub use bridge_addr::{bridge_url, detect_local_ipv4, generate_token};
 pub use bridge::{spawn_bridge, BridgeConfig, BridgeHandle, BridgeRequest, BridgeStatus};
+pub use bridge_addr::{bridge_url, detect_local_ipv4, generate_token};
 pub use bridge_http::{
     char_count, json_field_text, normalize_text, parse_head, route, tokens_match, HttpResponse,
     RequestHead, Route, MAX_TEXT_CHARS,
