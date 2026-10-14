@@ -75,6 +75,44 @@ pub fn insert_indicator_and_save_clipboard() -> Result<ClipboardRestoreGuard> {
     })
 }
 
+/// 读取当前剪贴板文本。剪贴板为空或格式不是文本时返回 `None`。
+///
+/// 剪贴板被别的进程占用时会返回 `None` 而不是报错——“读不到原内容”
+/// 只意味着后面不还原，不应该让整次注入失败。
+#[cfg(feature = "ibus")]
+pub fn read_clipboard_text() -> Option<String> {
+    arboard::Clipboard::new().ok()?.get_text().ok()
+}
+
+/// 把文本写回剪贴板。失败时返回错误说明。
+#[cfg(feature = "ibus")]
+pub fn restore_clipboard_text(text: &str) -> Result<()> {
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| VoiceInputError::Injection(format!("打开系统剪贴板失败：{e}")))?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| VoiceInputError::Injection(format!("写入系统剪贴板失败：{e}")))
+}
+
+/// 决定注入后要把什么写回剪贴板。
+///
+/// `Some(t)` 表示需要还原这段文本（含 `Some("")`——那代表剪贴板里确实
+/// 是一段空文本，不还原就会留下我们注入过的内容）；`None` 表示读不到
+/// 原内容，跳过还原。
+pub fn clipboard_text_to_restore(previous: Option<String>) -> Option<String> {
+    previous
+}
+
+#[cfg(not(feature = "ibus"))]
+pub fn read_clipboard_text() -> Option<String> {
+    None
+}
+
+#[cfg(not(feature = "ibus"))]
+pub fn restore_clipboard_text(_text: &str) -> Result<()> {
+    Ok(())
+}
+
 /// 持有剪贴板还原逻辑的守卫。
 /// `_clipboard` 字段在整个录音周期内保持 Clipboard 连接存活，
 /// 确保剪贴板管理器在足够长的时间内能同步内容。
@@ -294,4 +332,34 @@ pub fn type_text_in_active_window(_text: &str, _window_id: Option<&str>) -> Resu
 #[cfg(not(feature = "ibus"))]
 pub fn backspace_in_active_window(_count: usize, _window_id: Option<&str>) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clipboard_text_to_restore;
+
+    #[test]
+    fn restores_when_previous_text_present() {
+        assert_eq!(
+            clipboard_text_to_restore(Some("原有内容".to_string())).as_deref(),
+            Some("原有内容")
+        );
+    }
+
+    #[test]
+    fn skips_restore_when_clipboard_was_unreadable() {
+        // 读不到原内容（剪贴板被别的进程占用或本来就没有）时不还原，
+        // 不该往剪贴板里塞空串。
+        assert_eq!(clipboard_text_to_restore(None), None);
+    }
+
+    #[test]
+    fn restores_empty_string_when_clipboard_held_empty_string() {
+        // Some("") 与 None 语义不同：前者是「剪贴板里确实是一段空文本」，
+        // 需要还原，否则会留下我们注入过的内容。
+        assert_eq!(
+            clipboard_text_to_restore(Some(String::new())).as_deref(),
+            Some("")
+        );
+    }
 }
