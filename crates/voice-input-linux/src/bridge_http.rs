@@ -61,7 +61,10 @@ pub fn parse_head(head: &str) -> Result<RequestHead, String> {
     })
 }
 
-/// 常量时间比较，避免逐字节提前返回泄漏 token 前缀。
+/// 内容按常量时间比较，避免逐字节提前返回泄漏 token 前缀。
+///
+/// 长度不同则立即返回，所以严格说不是全常量时间——但 token 长度本就公开
+/// （地址格式 `#k=<32 位十六进制>` 里写着），泄漏长度无价值。
 pub fn tokens_match(expected: &str, provided: &str) -> bool {
     let expected = expected.as_bytes();
     let provided = provided.as_bytes();
