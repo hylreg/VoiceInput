@@ -1,4 +1,5 @@
 mod linux_tray {
+    use std::cell::{Cell, RefCell};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -6,8 +7,10 @@ mod linux_tray {
     use ksni::menu::StandardItem;
     use ksni::{Category, MenuItem, Status, ToolTip, Tray};
 
+    use crate::bridge_addr::bridge_url;
     use crate::recorder::LinuxMicAudioRecorder;
     use crate::restart::RestartController;
+    use crate::settings::LinuxAppSettings;
     use crate::system_ime::SystemImeController;
     use voice_input_core::{Result, VoiceInputError};
 
@@ -20,9 +23,22 @@ mod linux_tray {
         pub restart: RestartController,
         pub restart_requested: Arc<AtomicBool>,
         pub ime: SystemImeController,
+        /// 本机麦克风开关的共享状态，托盘与主循环共读。
+        pub mic_enabled: Arc<AtomicBool>,
+        /// 手机桥接开关的共享状态。
+        pub bridge_enabled: Arc<AtomicBool>,
+        /// 端口是否绑定成功。false 时相关菜单项置灰。
+        pub bridge_available: bool,
+        pub bridge_port: u16,
+        pub bridge_token: String,
+        /// 本机局域网 IP。`None` 表示探测失败。
+        pub local_ip: Option<String>,
+        /// 初始开关状态，用于预填托盘的本地副本。
+        pub settings: LinuxAppSettings,
     }
 
     impl LinuxTrayConfig {
+        #[allow(clippy::too_many_arguments)]
         pub fn new(
             service_name: impl Into<String>,
             title: impl Into<String>,
@@ -31,6 +47,13 @@ mod linux_tray {
             restart: RestartController,
             restart_requested: Arc<AtomicBool>,
             ime: SystemImeController,
+            mic_enabled: Arc<AtomicBool>,
+            bridge_enabled: Arc<AtomicBool>,
+            bridge_available: bool,
+            bridge_port: u16,
+            bridge_token: String,
+            local_ip: Option<String>,
+            settings: LinuxAppSettings,
         ) -> Self {
             Self {
                 service_name: service_name.into(),
@@ -40,6 +63,13 @@ mod linux_tray {
                 restart,
                 restart_requested,
                 ime,
+                mic_enabled,
+                bridge_enabled,
+                bridge_available,
+                bridge_port,
+                bridge_token,
+                local_ip,
+                settings,
             }
         }
     }
@@ -48,10 +78,14 @@ mod linux_tray {
         handle: ksni::blocking::Handle<LinuxTray>,
         quit_requested: Arc<AtomicBool>,
         restart_requested: Arc<AtomicBool>,
+        mic_enabled: Arc<AtomicBool>,
+        bridge_enabled: Arc<AtomicBool>,
     }
 
     impl LinuxTrayHandle {
         pub fn spawn(config: LinuxTrayConfig) -> Result<Self> {
+            let mic_enabled = Arc::clone(&config.mic_enabled);
+            let bridge_enabled = Arc::clone(&config.bridge_enabled);
             let tray = LinuxTray::new(config);
             let quit_requested = Arc::clone(&tray.quit_requested);
             let restart_requested = Arc::clone(&tray.restart_requested);
@@ -67,6 +101,8 @@ mod linux_tray {
                 handle,
                 quit_requested,
                 restart_requested,
+                mic_enabled,
+                bridge_enabled,
             })
         }
 
@@ -84,6 +120,26 @@ mod linux_tray {
             self.restart_requested.load(Ordering::SeqCst)
         }
 
+        pub fn is_mic_enabled(&self) -> bool {
+            self.mic_enabled.load(Ordering::SeqCst)
+        }
+
+        pub fn is_bridge_enabled(&self) -> bool {
+            self.bridge_enabled.load(Ordering::SeqCst)
+        }
+
+        /// 把内存里的开关状态落盘。只在正常退出路径调用——
+        /// 每次点击都写盘会在目录被 inotify 监视时引发连锁反应，
+        /// 而主循环反正每轮读内存变量，即时写盘对生效没有帮助。
+        pub fn persist_settings(&self) {
+            let _ = self.handle.update(|tray| {
+                let snapshot = tray.settings.borrow().clone();
+                if let Err(err) = snapshot.save() {
+                    eprintln!("保存 Linux 配置失败：{err}");
+                }
+            });
+        }
+
         pub fn shutdown(&self) {
             self.handle.shutdown().wait();
         }
@@ -98,10 +154,26 @@ mod linux_tray {
         restart: RestartController,
         restart_requested: Arc<AtomicBool>,
         ime: SystemImeController,
+        // 开关用 Cell：ksni 在每次 clicked 之后都会重算菜单（service.rs 的
+        // event() → update()），menu() 拿到的一定是最新值，不需要原子类型。
+        mic_enabled: Cell<bool>,
+        bridge_enabled: Cell<bool>,
+        /// 与 Cell 同步的共享状态，服务线程与主循环读它。
+        mic_enabled_shared: Arc<AtomicBool>,
+        bridge_enabled_shared: Arc<AtomicBool>,
+        bridge_available: bool,
+        bridge_port: u16,
+        bridge_token: String,
+        local_ip: Option<String>,
+        /// 与共享 AtomicBool 同步的 settings 副本，退出时整体落盘。
+        settings: RefCell<LinuxAppSettings>,
     }
 
     impl LinuxTray {
         fn new(config: LinuxTrayConfig) -> Self {
+            let mic_enabled_shared = Arc::clone(&config.mic_enabled);
+            let bridge_enabled_shared = Arc::clone(&config.bridge_enabled);
+
             Self {
                 service_name: config.service_name,
                 title: config.title,
@@ -111,6 +183,15 @@ mod linux_tray {
                 restart: config.restart,
                 restart_requested: config.restart_requested,
                 ime: config.ime,
+                mic_enabled: Cell::new(config.settings.mic_enabled),
+                bridge_enabled: Cell::new(config.settings.bridge_enabled),
+                mic_enabled_shared,
+                bridge_enabled_shared,
+                bridge_available: config.bridge_available,
+                bridge_port: config.bridge_port,
+                bridge_token: config.bridge_token,
+                local_ip: config.local_ip,
+                settings: RefCell::new(config.settings),
             }
         }
 
@@ -152,6 +233,71 @@ mod linux_tray {
 
         fn ime_enabled(&self) -> bool {
             self.ime.is_available() && !self.recording
+        }
+
+        fn mic_label(&self) -> String {
+            format!(
+                "本机麦克风：{}",
+                if self.mic_enabled.get() {
+                    "已启用"
+                } else {
+                    "已停用"
+                }
+            )
+        }
+
+        fn mic_toggle_enabled(&self) -> bool {
+            !self.recording
+        }
+
+        fn toggle_mic(&mut self) {
+            let next = !self.mic_enabled.get();
+            self.mic_enabled.set(next);
+            self.mic_enabled_shared.store(next, Ordering::SeqCst);
+            self.settings.borrow_mut().mic_enabled = next;
+        }
+
+        fn bridge_label(&self) -> String {
+            if !self.bridge_available {
+                return "手机输入（端口被占用）".to_string();
+            }
+            format!(
+                "手机输入：{}",
+                if self.bridge_enabled.get() {
+                    "已启用"
+                } else {
+                    "已停用"
+                }
+            )
+        }
+
+        fn bridge_toggle_enabled(&self) -> bool {
+            self.bridge_available
+        }
+
+        fn toggle_bridge(&mut self) {
+            let next = !self.bridge_enabled.get();
+            self.bridge_enabled.set(next);
+            self.bridge_enabled_shared.store(next, Ordering::SeqCst);
+            self.settings.borrow_mut().bridge_enabled = next;
+        }
+
+        fn copy_address_label(&self) -> String {
+            format!("复制外部输入地址（{}）", self.bridge_port)
+        }
+
+        fn copy_address_enabled(&self) -> bool {
+            self.bridge_available && self.local_ip.is_some()
+        }
+
+        /// 地址在点击时现算——网卡是 DHCP 动态的，IP 会变。
+        /// IP 探测失败时回落 127.0.0.1，方便在本机浏览器里验证页面本身。
+        fn address_url(&self) -> Option<String> {
+            let ip = self
+                .local_ip
+                .clone()
+                .unwrap_or_else(|| "127.0.0.1".to_string());
+            Some(bridge_url(&ip, self.bridge_port, &self.bridge_token))
         }
     }
 
@@ -231,6 +377,58 @@ mod linux_tray {
 
             items.push(
                 StandardItem {
+                    label: self.mic_label(),
+                    enabled: self.mic_toggle_enabled(),
+                    visible: true,
+                    icon_name: "audio-input-microphone".to_string(),
+                    activate: Box::new(|tray: &mut LinuxTray| {
+                        tray.toggle_mic();
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+
+            items.push(
+                StandardItem {
+                    label: self.bridge_label(),
+                    enabled: self.bridge_toggle_enabled(),
+                    visible: true,
+                    icon_name: "phone".to_string(),
+                    activate: Box::new(|tray: &mut LinuxTray| {
+                        tray.toggle_bridge();
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+
+            items.push(
+                StandardItem {
+                    label: self.copy_address_label(),
+                    enabled: self.copy_address_enabled(),
+                    visible: true,
+                    icon_name: "edit-copy".to_string(),
+                    activate: Box::new(|tray: &mut LinuxTray| {
+                        let Some(url) = tray.address_url() else {
+                            eprintln!("复制外部输入地址失败：没有可用地址");
+                            return;
+                        };
+                        match crate::ibus::restore_clipboard_text(&url) {
+                            // 日志不记 URL 内容——里面含 token。
+                            Ok(()) => println!("外部输入地址已复制到剪贴板"),
+                            Err(err) => eprintln!("复制外部输入地址失败：{err}"),
+                        }
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+
+            items.push(MenuItem::Separator);
+
+            items.push(
+                StandardItem {
                     label: self.restart_label(),
                     enabled: self.restart_enabled(),
                     visible: true,
@@ -293,12 +491,32 @@ mod linux_tray {
         use super::LinuxTray;
         use crate::recorder::LinuxMicAudioRecorder;
         use crate::restart::RestartController;
+        use crate::settings::LinuxAppSettings;
         use crate::system_ime::SystemImeController;
+        use std::cell::{Cell, RefCell};
         use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
         use std::time::Duration;
 
         fn tray_with(cgroup: &str, recording: bool, ibus_running: bool) -> LinuxTray {
+            tray_with_bridge(
+                cgroup,
+                recording,
+                ibus_running,
+                true,
+                true,
+                Some("10.0.0.5"),
+            )
+        }
+
+        fn tray_with_bridge(
+            cgroup: &str,
+            recording: bool,
+            ibus_running: bool,
+            mic_enabled: bool,
+            bridge_enabled: bool,
+            local_ip: Option<&str>,
+        ) -> LinuxTray {
             let restart = RestartController::from_cgroup_content(cgroup, "voice-input.service");
             let ime = if ibus_running {
                 SystemImeController::from_probe(&["ibus-daemon"])
@@ -314,6 +532,17 @@ mod linux_tray {
                 restart,
                 restart_requested: Arc::new(AtomicBool::new(false)),
                 ime,
+                mic_enabled: Cell::new(mic_enabled),
+                bridge_enabled: Cell::new(bridge_enabled),
+                mic_enabled_shared: Arc::new(AtomicBool::new(mic_enabled)),
+                bridge_enabled_shared: Arc::new(AtomicBool::new(bridge_enabled)),
+                // 端口可用性与开关状态是两回事：关掉开关不代表端口没绑上。
+                // 这里固定为 true，需要「端口被占用」场景的测试自行改写该字段。
+                bridge_available: true,
+                bridge_port: 8765,
+                bridge_token: "abc123".to_string(),
+                local_ip: local_ip.map(str::to_string),
+                settings: RefCell::new(LinuxAppSettings::default()),
             }
         }
 
@@ -378,6 +607,135 @@ mod linux_tray {
         fn ime_enabled_when_available_and_idle() {
             let tray = tray_with(MATCHING, false, true);
             assert!(tray.ime_enabled());
+        }
+
+        #[test]
+        fn mic_label_shows_enabled_state() {
+            let tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            assert_eq!(tray.mic_label(), "本机麦克风：已启用");
+        }
+
+        #[test]
+        fn mic_label_shows_disabled_state() {
+            let tray = tray_with_bridge(MATCHING, false, true, false, true, Some("10.0.0.5"));
+
+            assert_eq!(tray.mic_label(), "本机麦克风：已停用");
+        }
+
+        #[test]
+        fn toggling_mic_flips_label() {
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            tray.toggle_mic();
+
+            assert_eq!(tray.mic_label(), "本机麦克风：已停用");
+            assert!(!tray.mic_enabled.get());
+        }
+
+        #[test]
+        fn toggling_mic_twice_returns_to_enabled() {
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            tray.toggle_mic();
+            tray.toggle_mic();
+
+            assert!(tray.mic_enabled.get());
+        }
+
+        #[test]
+        fn bridge_label_shows_enabled_state() {
+            let tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            assert_eq!(tray.bridge_label(), "手机输入：已启用");
+        }
+
+        #[test]
+        fn bridge_label_shows_disabled_state() {
+            let tray = tray_with_bridge(MATCHING, false, true, true, false, Some("10.0.0.5"));
+
+            assert_eq!(tray.bridge_label(), "手机输入：已停用");
+        }
+
+        #[test]
+        fn toggling_bridge_flips_label() {
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            tray.toggle_bridge();
+
+            assert_eq!(tray.bridge_label(), "手机输入：已停用");
+        }
+
+        #[test]
+        fn bridge_label_explains_when_port_unavailable() {
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+            tray.bridge_available = false;
+
+            assert_eq!(tray.bridge_label(), "手机输入（端口被占用）");
+        }
+
+        #[test]
+        fn bridge_toggle_is_disabled_when_port_unavailable() {
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+            tray.bridge_available = false;
+
+            assert!(!tray.bridge_toggle_enabled());
+        }
+
+        #[test]
+        fn copy_address_enabled_when_available() {
+            let tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            assert!(tray.copy_address_enabled());
+        }
+
+        #[test]
+        fn copy_address_disabled_when_port_unavailable() {
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+            tray.bridge_available = false;
+
+            assert!(!tray.copy_address_enabled());
+        }
+
+        #[test]
+        fn copy_address_disabled_when_ip_unknown() {
+            let tray = tray_with_bridge(MATCHING, false, true, true, true, None);
+
+            assert!(!tray.copy_address_enabled());
+        }
+
+        #[test]
+        fn address_label_shows_port() {
+            let tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            assert_eq!(tray.copy_address_label(), "复制外部输入地址（8765）");
+        }
+
+        #[test]
+        fn address_url_uses_current_ip() {
+            let tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            assert_eq!(
+                tray.address_url().as_deref(),
+                Some("http://10.0.0.5:8765/#k=abc123")
+            );
+        }
+
+        #[test]
+        fn address_url_falls_back_to_loopback_when_ip_unknown() {
+            let tray = tray_with_bridge(MATCHING, false, true, true, true, None);
+
+            assert_eq!(
+                tray.address_url().as_deref(),
+                Some("http://127.0.0.1:8765/#k=abc123")
+            );
+        }
+
+        #[test]
+        fn toggles_are_also_disabled_while_recording() {
+            let tray = tray_with_bridge(MATCHING, true, true, true, true, Some("10.0.0.5"));
+
+            assert!(!tray.mic_toggle_enabled());
         }
     }
 }
