@@ -72,6 +72,8 @@ query string 会泄漏，fragment 不会。
 
 ### 状态码
 
+下表除 401 外均针对 `POST /send`；401 对 `/send` 与 `/api/status` 都适用（`GET /` 公开，不鉴权）。
+
 | 码 | 场景 |
 |---|---|
 | 200 | 注入成功 |
@@ -80,6 +82,16 @@ query string 会泄漏，fragment 不会。
 | 413 | 文本超过 500 字符 |
 | 429 | 队列满（本机处理不过来） |
 | 503 | 主循环 2s 内未回票（通常是在录音） |
+
+### 响应体
+
+`/send` 与 `/api/status` 一律返回 `application/json`：
+
+- 成功：`{"ok":true}`
+- 失败：`{"error":"<给用户看的中文说明>"}`
+
+页面直接把 `error` 渲染到历史条目的红色提示里，不做状态码到文案的二次映射——
+文案只有服务端一处来源，避免两边不一致。
 
 ## 文本归一化
 
@@ -126,6 +138,8 @@ query string 会泄漏，fragment 不会。
 
 端口继续监听是刻意的——避免关一次开关就要在手机上重连。
 
+「复制外部输入地址」在端口绑定失败时同样置灰（此时地址没有意义）。
+
 ### 持久化时机
 
 内存态切换，**不即时写盘**；在已有的正常退出路径上（托盘退出 / 重启输入法）统一落盘一次。
@@ -142,6 +156,10 @@ query string 会泄漏，fragment 不会。
 本机网卡是 DHCP 动态（`valid_lft` 会变），IP 会变。settings 只存端口与 token。
 
 URL 组成：`http://<当前IP>:<端口>/#k=<token>`，写进剪贴板。
+
+IP 探测失败时回退到 `http://127.0.0.1:<端口>/#k=<token>`，并打印一行提示。
+这个地址在手机上打不开，但在本机浏览器里可以验证页面本身是否正常，
+也是唯一的本机自测手段。
 
 ## 地址与 token
 
@@ -189,7 +207,7 @@ token 是唯一屏障，不可视为装饰。
 | 文件 | 内容 |
 |---|---|
 | `crates/voice-input-linux/src/bridge.rs` | 服务线程、config、handle、IP/token 生成 |
-| `crates/voice-input-linux/src/bridge_http.rs` | **纯函数**：请求行/头/Content-Length/fragment 解析、响应组装、文本归一化 |
+| `crates/voice-input-linux/src/bridge_http.rs` | **纯函数**：请求行/头/Content-Length 解析、`X-Auth-Token` 取值、响应组装、文本归一化 |
 | `crates/voice-input-linux/src/bridge_page.html` | 内嵌页面 |
 | `src/tray.rs` | 两个开关项 + 「复制地址」 |
 | `src/settings.rs` | 两个开关 + token + 端口 |
@@ -199,7 +217,8 @@ token 是唯一屏障，不可视为装饰。
 
 沿用项目现有风格（纯函数单测 + 少量集成）：
 
-- `bridge_http`：请求行/头/Content-Length 解析、响应组装、归一化（换行、多空白、空串、超长）全部纯函数单测
+- `bridge_http`：请求行/头/Content-Length 解析、`X-Auth-Token` 取值、响应组装、
+  归一化（换行、多空白、空串、超长）全部纯函数单测
 - `bridge.rs`：测试内绑 0 端口跑真实 TCP 往返，覆盖 200 / 401 / 409 / 413 / 429
 - 主循环排空逻辑：用测试内的假 host 断言注入文本与调用次数
 - CLI：`--bridge-port` 解析单测
