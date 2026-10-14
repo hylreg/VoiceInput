@@ -1,0 +1,213 @@
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::time::Duration;
+
+use voice_input_linux::{
+    spawn_bridge, BridgeConfig, BridgeRequest, BridgeStatus, LinuxMicAudioRecorder,
+};
+
+const TOKEN: &str = "deadbeefdeadbeefdeadbeefdeadbeef";
+
+/// 起一个测试用桥接服务，绑 0 端口。返回服务句柄、连接地址、接收端。
+fn test_bridge(
+    enabled: bool,
+) -> (
+    voice_input_linux::BridgeHandle,
+    String,
+    mpsc::Receiver<BridgeRequest>,
+) {
+    let status = Arc::new(BridgeStatus::new(
+        Arc::new(AtomicBool::new(enabled)),
+        TOKEN.to_string(),
+        LinuxMicAudioRecorder::new(Duration::from_secs(30)),
+    ));
+    let (sender, receiver) = mpsc::sync_channel(8);
+    let handle =
+        spawn_bridge(BridgeConfig { port: 0 }, status, sender).expect("桥接服务应当启动成功");
+
+    let addr = handle.local_addr().to_string();
+    (handle, addr, receiver)
+}
+
+/// 发一个原始 HTTP 请求，读回全部响应文本。
+fn raw_request(addr: &str, request: &str) -> String {
+    let mut stream = TcpStream::connect(addr).expect("应当能连上桥接服务");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("设置读超时");
+    stream
+        .write_all(request.as_bytes())
+        .expect("写请求应当成功");
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    response
+}
+
+fn send_request(addr: &str, token: &str, body: &str) -> String {
+    raw_request(
+        addr,
+        &format!(
+            "POST /send HTTP/1.1\r\nHost: x\r\nX-Auth-Token: {token}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+}
+
+#[test]
+fn page_is_public() {
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let response = raw_request(addr.as_str(), "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK\r\n"),
+        "实际：{response}"
+    );
+    // 只看响应头：页面脚本里本身就有 Content-Type: application/json 的字样，
+    // 断言整个响应不含该串会误判。
+    let (head, _body) = response.split_once("\r\n\r\n").expect("应当有头体分隔");
+    assert!(
+        head.contains("Content-Type: text/html") && !head.contains("application/json"),
+        "页面不应该是 JSON：{response}"
+    );
+}
+
+#[test]
+fn send_with_valid_token_is_queued_and_acked() {
+    let (_handle, addr, rx) = test_bridge(true);
+
+    // 主循环的替身：收下请求并回票成功。
+    let worker = std::thread::spawn(move || {
+        let request = rx.recv().expect("应当收到桥接请求");
+        assert_eq!(request.text, "你好世界");
+        request.reply.send(Ok(())).expect("回票应当成功");
+    });
+
+    let response = send_request(&addr, TOKEN, r#"{"text":"你好世界"}"#);
+
+    worker.join().expect("worker 线程应当正常结束");
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK\r\n"),
+        "实际：{response}"
+    );
+    assert!(response.ends_with(r#"{"ok":true}"#), "实际：{response}");
+}
+
+#[test]
+fn send_without_token_is_unauthorized() {
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let response = send_request(&addr, "wrong-token", r#"{"text":"x"}"#);
+
+    assert!(response.starts_with("HTTP/1.1 401 "), "实际：{response}");
+}
+
+#[test]
+fn send_when_disabled_is_conflict() {
+    let (_handle, addr, _rx) = test_bridge(false);
+
+    let response = send_request(&addr, TOKEN, r#"{"text":"x"}"#);
+
+    assert!(response.starts_with("HTTP/1.1 409 "), "实际：{response}");
+}
+
+#[test]
+fn send_too_long_is_payload_too_large() {
+    let (_handle, addr, _rx) = test_bridge(true);
+    let long = "字".repeat(501);
+    let body = format!(r#"{{"text":"{long}"}}"#);
+
+    let response = send_request(&addr, TOKEN, &body);
+
+    assert!(response.starts_with("HTTP/1.1 413 "), "实际：{response}");
+}
+
+#[test]
+fn send_blank_text_is_bad_request() {
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let response = send_request(&addr, TOKEN, r#"{"text":"   \n  "}"#);
+
+    assert!(response.starts_with("HTTP/1.1 400 "), "实际：{response}");
+}
+
+#[test]
+fn send_when_queue_full_is_too_many_requests() {
+    let (_handle, addr, _rx) = test_bridge(true);
+    // 不排空队列。队列容量 8，第 9 个请求必然满。
+    // 每个请求会阻塞等待回票直到 2s 超时，所以并发发出后统一收结果。
+    let mut threads = Vec::new();
+    for _ in 0..9 {
+        let addr = addr.clone();
+        threads.push(std::thread::spawn(move || {
+            send_request(&addr, TOKEN, r#"{"text":"x"}"#)
+        }));
+    }
+
+    let responses: Vec<String> = threads
+        .into_iter()
+        .map(|t| t.join().expect("线程应当正常结束"))
+        .collect();
+
+    assert!(
+        responses.iter().any(|r| r.starts_with("HTTP/1.1 429 ")),
+        "9 个请求里应当至少有一个 429，实际：{responses:?}"
+    );
+}
+
+#[test]
+fn send_when_worker_never_acks_is_service_unavailable() {
+    let (_handle, addr, _rx) = test_bridge(true);
+    // 主循环替身缺失：请求进了队列但没人回票，2s 后应当超时。
+
+    let response = send_request(&addr, TOKEN, r#"{"text":"x"}"#);
+
+    assert!(response.starts_with("HTTP/1.1 503 "), "实际：{response}");
+}
+
+#[test]
+fn status_reports_mic_and_bridge_state() {
+    let (_handle, addr, _rx) = test_bridge(false);
+
+    let response = raw_request(
+        addr.as_str(),
+        &format!("GET /api/status HTTP/1.1\r\nHost: x\r\nX-Auth-Token: {TOKEN}\r\n\r\n"),
+    );
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK\r\n"),
+        "实际：{response}"
+    );
+    assert!(
+        response.contains(r#""bridge_enabled":false"#),
+        "实际：{response}"
+    );
+    assert!(
+        response.contains(r#""mic_recording":false"#),
+        "实际：{response}"
+    );
+}
+
+#[test]
+fn unknown_path_is_not_found() {
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let response = raw_request(addr.as_str(), "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n");
+
+    assert!(response.starts_with("HTTP/1.1 404 "), "实际：{response}");
+}
+
+#[test]
+fn response_always_closes_connection() {
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let response = raw_request(addr.as_str(), "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+
+    assert!(
+        response.contains("Connection: close\r\n"),
+        "实际：{response}"
+    );
+}

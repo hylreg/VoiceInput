@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>VoiceInput 手机输入</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; min-height: 100vh;
+    background: #17181c; color: #e8e8ea;
+    font: 16px/1.5 -apple-system, "Noto Sans CJK SC", sans-serif;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  #notice { font-size: 13px; color: #9a9aa2; min-height: 1.2em; }
+  #notice.error { color: #ff6b6b; }
+  #notice.ok { color: #51cf66; }
+  textarea {
+    flex: 1 1 auto; min-height: 30vh; width: 100%;
+    padding: 12px; border-radius: 10px; resize: vertical;
+    background: #22232a; color: inherit; font: inherit;
+    border: 1px solid #34353d;
+  }
+  textarea:focus { outline: 2px solid #4c8bf5; border-color: transparent; }
+  button {
+    width: 100%; padding: 18px; font-size: 18px; font-weight: 600;
+    border: 0; border-radius: 10px; background: #4c8bf5; color: #fff;
+  }
+  button:disabled { background: #3a3b44; color: #8a8a92; }
+  #history { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  #history li {
+    padding: 8px 10px; border-radius: 8px; margin-bottom: 6px;
+    background: #22232a; word-break: break-word;
+  }
+  #history li.failed { background: #3a1f22; color: #ffb3b3; }
+  #history time { color: #7a7a82; margin-right: 8px; }
+</style>
+</head>
+<body>
+<h1>VoiceInput 手机输入</h1>
+<p id="notice"></p>
+<textarea id="text" autofocus placeholder="用输入法的语音键说话，确认后点发送"></textarea>
+<button id="send">发送</button>
+<ul id="history"></ul>
+<script>
+(function () {
+  var TEXT = document.getElementById('text');
+  var SEND = document.getElementById('send');
+  var NOTICE = document.getElementById('notice');
+  var HISTORY = document.getElementById('history');
+  var LS_HISTORY = 'voiceinput.history';
+  var LS_TOKEN = 'voiceinput.token';
+
+  function readFragmentToken() {
+    var match = /(?:^|[#&])k=([0-9a-fA-F]+)/.exec(location.hash || '');
+    return match ? match[1] : '';
+  }
+
+  // fragment 只发一次；存进 localStorage 之后开裸地址也能用。
+  var fragmentToken = readFragmentToken();
+  if (fragmentToken) { localStorage.setItem(LS_TOKEN, fragmentToken); }
+  var TOKEN = fragmentToken || localStorage.getItem(LS_TOKEN) || '';
+
+  function notice(text, kind) {
+    NOTICE.textContent = text || '';
+    NOTICE.className = kind || '';
+  }
+
+  function loadHistory() {
+    try { return JSON.parse(localStorage.getItem(LS_HISTORY) || '[]'); }
+    catch (e) { return []; }
+  }
+  function saveHistory(rows) {
+    try { localStorage.setItem(LS_HISTORY, JSON.stringify(rows.slice(-50))); }
+    catch (e) { /* 存不下就算了，页面本身可用 */ }
+  }
+
+  function render() {
+    var rows = loadHistory();
+    HISTORY.innerHTML = '';
+    rows.slice().reverse().forEach(function (row) {
+      var li = document.createElement('li');
+      if (row.failed) { li.className = 'failed'; }
+      var time = document.createElement('time');
+      time.textContent = row.time;
+      li.appendChild(time);
+      li.appendChild(document.createTextNode(row.text));
+      HISTORY.appendChild(li);
+    });
+  }
+
+  function push(text, failed) {
+    var rows = loadHistory();
+    rows.push({
+      text: text,
+      failed: !!failed,
+      time: new Date().toTimeString().slice(0, 8)
+    });
+    saveHistory(rows);
+    render();
+  }
+
+  function authHeaders() {
+    return { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' };
+  }
+
+  function send() {
+    var text = TEXT.value.trim();
+    if (!text) { notice('文本为空', 'error'); return; }
+    SEND.disabled = true;
+    notice('检查本机状态…');
+
+    fetch('/api/status', { headers: authHeaders() })
+      .then(function (res) {
+        if (res.status === 401) { throw new Error('token 已变更，请从托盘菜单重新复制地址'); }
+        if (!res.ok) { throw new Error('状态查询失败（' + res.status + '）'); }
+        return res.json();
+      })
+      .then(function (state) {
+        if (!state.bridge_enabled) { throw new Error('手机输入已关闭，请在托盘菜单里开启'); }
+        if (state.mic_recording) { throw new Error('本机正在录音，稍后重试'); }
+        notice('发送中…');
+        return fetch('/send', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ text: text })
+        });
+      })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          if (res.ok) {
+            push(text, false);
+            TEXT.value = '';
+            TEXT.focus();
+            notice('已注入本机光标', 'ok');
+            return;
+          }
+          throw new Error(data.error || ('发送失败（' + res.status + '）'));
+        });
+      })
+      .catch(function (err) {
+        push(text, true);
+        notice(err.message, 'error');
+      })
+      .then(function () { SEND.disabled = false; });
+  }
+
+  SEND.addEventListener('click', send);
+  // 回车不发送：手机语音输入会插入换行，回车当发送必然误触。
+  TEXT.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') { event.preventDefault(); }
+  });
+
+  if (!TOKEN) {
+    notice('缺少 token，请用托盘菜单「复制外部输入地址」给出的完整链接打开', 'error');
+    SEND.disabled = true;
+  }
+  render();
+})();
+</script>
+</body>
+</html>

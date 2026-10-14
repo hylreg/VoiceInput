@@ -1,4 +1,6 @@
+mod bridge;
 mod bridge_http;
+mod bridge_page;
 mod host;
 mod hotkey;
 mod ibus;
@@ -12,6 +14,12 @@ mod smoke;
 mod system_ime;
 mod tray;
 
+pub use bridge::{spawn_bridge, BridgeConfig, BridgeHandle, BridgeRequest, BridgeStatus};
+pub use bridge_http::{
+    char_count, json_field_text, normalize_text, parse_head, route, tokens_match, HttpResponse,
+    RequestHead, Route, MAX_TEXT_CHARS,
+};
+pub use bridge_page::PAGE;
 pub use host::LinuxInputMethodHost;
 pub use hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
 pub use live::LiveJobState;
