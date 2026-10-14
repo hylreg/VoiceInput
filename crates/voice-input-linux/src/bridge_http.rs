@@ -61,6 +61,44 @@ pub fn parse_head(head: &str) -> Result<RequestHead, String> {
     })
 }
 
+/// 常量时间比较，避免逐字节提前返回泄漏 token 前缀。
+pub fn tokens_match(expected: &str, provided: &str) -> bool {
+    let expected = expected.as_bytes();
+    let provided = provided.as_bytes();
+
+    if expected.len() != provided.len() {
+        return false;
+    }
+
+    let mut diff = 0u8;
+    for (a, b) in expected.iter().zip(provided.iter()) {
+        diff |= a ^ b;
+    }
+    diff == 0
+}
+
+/// 路由判定结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// 手机页面本身，公开访问。
+    Page,
+    /// 注入文字，需要 token。
+    Send,
+    /// 状态查询，需要 token。
+    Status,
+    NotFound,
+}
+
+/// 按方法 + 路径判定路由。方法不匹配视为 NotFound（本服务不实现 405）。
+pub fn route(method: &str, path: &str) -> Route {
+    match (method, path) {
+        ("GET", "/") => Route::Page,
+        ("POST", "/send") => Route::Send,
+        ("GET", "/api/status") => Route::Status,
+        _ => Route::NotFound,
+    }
+}
+
 /// 注入前的文本归一化：换行折成空格 → 连续空白折叠为单个空格 → 首尾 trim。
 ///
 /// 手机 textarea 允许换行，而 xdotool type 会把 `\n` 发成回车——
@@ -222,5 +260,54 @@ mod tests {
     #[test]
     fn truncated_request_line_is_rejected() {
         assert!(parse_head("GET\r\n\r\n").is_err());
+    }
+
+    #[test]
+    fn tokens_match_when_equal() {
+        assert!(tokens_match("abc123", "abc123"));
+    }
+
+    #[test]
+    fn tokens_differ_on_wrong_value() {
+        assert!(!tokens_match("abc123", "abc124"));
+    }
+
+    #[test]
+    fn tokens_differ_on_length_mismatch() {
+        assert!(!tokens_match("abc123", "abc12"));
+        assert!(!tokens_match("abc12", "abc123"));
+    }
+
+    #[test]
+    fn tokens_differ_when_provided_is_empty() {
+        assert!(!tokens_match("abc123", ""));
+    }
+
+    #[test]
+    fn routes_page_at_root() {
+        assert_eq!(route("GET", "/"), Route::Page);
+    }
+
+    #[test]
+    fn routes_send_at_send() {
+        assert_eq!(route("POST", "/send"), Route::Send);
+    }
+
+    #[test]
+    fn routes_status_at_api_status() {
+        assert_eq!(route("GET", "/api/status"), Route::Status);
+    }
+
+    #[test]
+    fn wrong_method_is_not_found() {
+        assert_eq!(route("GET", "/send"), Route::NotFound);
+        assert_eq!(route("POST", "/"), Route::NotFound);
+        assert_eq!(route("POST", "/api/status"), Route::NotFound);
+    }
+
+    #[test]
+    fn unknown_path_is_not_found() {
+        assert_eq!(route("GET", "/nope"), Route::NotFound);
+        assert_eq!(route("GET", "/api/"), Route::NotFound);
     }
 }
