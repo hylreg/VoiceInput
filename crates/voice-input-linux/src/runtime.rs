@@ -5,7 +5,8 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::bridge::BridgeRequest;
+use crate::bridge::{spawn_bridge, BridgeConfig, BridgeRequest, BridgeStatus, QUEUE_CAPACITY};
+use crate::bridge_addr::{detect_local_ipv4, generate_token};
 use crate::bridge_http::char_count;
 use crate::host::LinuxInputMethodHost;
 use crate::hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
@@ -30,6 +31,7 @@ pub struct LinuxLiveAppConfig {
     pub silence_stop_timeout: Duration,
     pub show_status_item: bool,
     pub service_name: String,
+    pub bridge_port: u16,
 }
 
 impl Default for LinuxLiveAppConfig {
@@ -45,6 +47,7 @@ impl Default for LinuxLiveAppConfig {
             silence_stop_timeout: Duration::from_millis(1500),
             show_status_item: true,
             service_name: "voice-input".to_string(),
+            bridge_port: 8765,
         }
     }
 }
@@ -138,9 +141,48 @@ fn drain_bridge_requests(rx: &Receiver<BridgeRequest>, host: &dyn InputMethodHos
     injected
 }
 
+/// 桥接启动所需的外部输入。抽成结构体是为了能在单测里构造。
+#[derive(Debug, Clone)]
+pub struct BridgeSetupConfig {
+    pub enabled_in_settings: bool,
+    pub port: u16,
+    pub stored_token: String,
+    pub saved_settings: LinuxAppSettings,
+}
+
+/// 桥接的启动参数与初始状态。
+#[derive(Debug, Clone)]
+pub struct BridgeSetup {
+    pub token: String,
+    pub settings: LinuxAppSettings,
+}
+
+/// 决定 token 与生效 settings。
+///
+/// token 缺失时生成一个新的并写回 settings——这一点必须落盘，
+/// 否则每次重启都换 token，手机上存的地址全部失效。
+pub fn prepare_bridge(config: BridgeSetupConfig) -> BridgeSetup {
+    let token = if config.stored_token.trim().is_empty() {
+        generate_token()
+    } else {
+        config.stored_token
+    };
+
+    let mut settings = config.saved_settings;
+    settings.bridge_token = token.clone();
+    settings.bridge_port = config.port;
+    // `enabled_in_settings` 参数保留为显式兜底：settings 里的开关是权威值，
+    // 但调用方若显式传入 false（例如 --no-bridge），以调用方为准。
+    if !config.enabled_in_settings {
+        settings.bridge_enabled = false;
+    }
+
+    BridgeSetup { token, settings }
+}
+
 fn run_recording_cycle(
     recorder: &LinuxMicAudioRecorder,
-    host: &LinuxInputMethodHost,
+    host: &dyn InputMethodHost,
     transcriber: &LocalFunAsrTranscriber,
     silence_stop_timeout: Duration,
     tray: Option<&LinuxTrayHandle>,
@@ -255,6 +297,49 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
     let asr_runner = build_linux_asr(&config.asr)?;
     let transcriber = LocalFunAsrTranscriber::new(config.asr.clone(), asr_runner);
     println!("ASR 模型预加载完成");
+    // ---- 桥接 ----
+    let saved_settings = LinuxAppSettings::load();
+    let setup = prepare_bridge(BridgeSetupConfig {
+        enabled_in_settings: saved_settings.bridge_enabled,
+        port: config.bridge_port,
+        stored_token: saved_settings.bridge_token.clone(),
+        saved_settings,
+    });
+    let mic_enabled = Arc::new(AtomicBool::new(setup.settings.mic_enabled));
+    let bridge_enabled = Arc::new(AtomicBool::new(setup.settings.bridge_enabled));
+
+    let bridge_status = Arc::new(BridgeStatus::new(
+        Arc::clone(&bridge_enabled),
+        setup.token.clone(),
+        recorder.clone(),
+    ));
+    let (bridge_tx, bridge_rx) = std::sync::mpsc::sync_channel(QUEUE_CAPACITY);
+    let bridge = match spawn_bridge(
+        BridgeConfig {
+            port: config.bridge_port,
+        },
+        Arc::clone(&bridge_status),
+        bridge_tx,
+    ) {
+        Ok(handle) => Some(handle),
+        Err(err) => {
+            // 端口绑定失败不影响主程序启动，退化为「无手机输入」。
+            eprintln!("{err}");
+            eprintln!("手机输入已禁用；本机麦克风不受影响");
+            None
+        }
+    };
+
+    let local_ip = detect_local_ipv4().map(|ip| ip.to_string());
+    if let Some(ref handle) = bridge {
+        let display_ip = local_ip.clone().unwrap_or_else(|| "127.0.0.1".to_string());
+        println!("手机输入已就绪，监听端口 {}", handle.local_addr().port());
+        println!(
+            "手机地址（托盘菜单可复制）：{}",
+            crate::bridge_addr::bridge_url(&display_ip, handle.local_addr().port(), &setup.token)
+        );
+    }
+
     let tray = if config.show_status_item {
         let tray = spawn_linux_tray(LinuxTrayConfig::new(
             config.service_name.clone(),
@@ -264,13 +349,13 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
             restart,
             Arc::clone(&restart_requested),
             ime,
-            Arc::new(AtomicBool::new(true)),
-            Arc::new(AtomicBool::new(true)),
-            false,
-            8765,
-            String::new(),
-            None,
-            LinuxAppSettings::default(),
+            Arc::clone(&mic_enabled),
+            Arc::clone(&bridge_enabled),
+            bridge.is_some(),
+            config.bridge_port,
+            setup.token.clone(),
+            local_ip,
+            setup.settings.clone(),
         ))?;
         tray.set_recording(false);
         Some(tray)
@@ -291,7 +376,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
     print_live_ready(
         "Linux",
         &hotkey_label,
-        "双击一次开始录音，再双击一次停止并转写",
+        "双击一次开始录音，再双击一次停止并转写；手机发来的文字直接注入当前光标",
         [
             format!("双击间隔：{}ms", config.double_press_window.as_millis()),
             silence_label,
@@ -306,8 +391,18 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
             break;
         }
 
+        // 手机发来的文字优先处理：它们已经在等回票，拖久了 HTTP 会超时。
+        drain_bridge_requests(&bridge_rx, &host);
+
         let triggered = watcher.wait_for_trigger_timeout(Duration::from_millis(250))?;
         if !triggered {
+            continue;
+        }
+
+        // 本机麦克风开关关闭时忽略热键，但要留一行日志，
+        // 否则用户会以为热键坏了。
+        if !mic_enabled.load(Ordering::SeqCst) {
+            println!("本机麦克风已停用，忽略热键触发");
             continue;
         }
 
@@ -327,7 +422,9 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
         }
     }
 
+    // 正常退出路径：把内存里的开关状态落盘。
     if let Some(tray) = tray.as_ref() {
+        tray.persist_settings();
         tray.shutdown();
     }
 
@@ -337,6 +434,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::LinuxAppSettings;
     use std::cell::RefCell;
     use std::sync::mpsc;
     use voice_input_core::InputMethodHost;
@@ -460,5 +558,79 @@ mod tests {
         .expect("入队应当成功");
 
         assert_eq!(drain_bridge_requests(&rx, &host), 1);
+    }
+
+    #[test]
+    fn bridge_setup_generates_token_when_missing() {
+        let config = BridgeSetupConfig {
+            enabled_in_settings: true,
+            port: 8765,
+            stored_token: String::new(),
+            saved_settings: LinuxAppSettings::default(),
+        };
+
+        let setup = prepare_bridge(config);
+
+        assert_eq!(setup.token.len(), 32, "应当生成 32 位十六进制 token");
+        assert!(
+            setup.settings.bridge_token == setup.token,
+            "生成的 token 必须写回 settings，否则重启后手机上存的地址就失效了"
+        );
+    }
+
+    #[test]
+    fn bridge_setup_reuses_stored_token() {
+        let config = BridgeSetupConfig {
+            enabled_in_settings: true,
+            port: 8765,
+            stored_token: "storedtoken".to_string(),
+            saved_settings: LinuxAppSettings::default(),
+        };
+
+        let setup = prepare_bridge(config);
+
+        assert_eq!(setup.token, "storedtoken");
+    }
+
+    #[test]
+    fn bridge_setup_carries_port_and_switches() {
+        let saved = LinuxAppSettings {
+            mic_enabled: false,
+            bridge_enabled: true,
+            bridge_port: 9999,
+            ..Default::default()
+        };
+        let config = BridgeSetupConfig {
+            enabled_in_settings: true,
+            port: 9999,
+            stored_token: "t".to_string(),
+            saved_settings: saved,
+        };
+
+        let setup = prepare_bridge(config);
+
+        assert_eq!(setup.settings.bridge_port, 9999);
+        assert!(!setup.settings.mic_enabled);
+        assert!(setup.settings.bridge_enabled);
+    }
+
+    #[test]
+    fn bridge_setup_keeps_switches_from_settings() {
+        let saved = LinuxAppSettings {
+            mic_enabled: false,
+            bridge_enabled: false,
+            ..Default::default()
+        };
+        let config = BridgeSetupConfig {
+            enabled_in_settings: false,
+            port: 8765,
+            stored_token: "t".to_string(),
+            saved_settings: saved,
+        };
+
+        let setup = prepare_bridge(config);
+
+        assert!(!setup.settings.bridge_enabled);
+        assert!(!setup.settings.mic_enabled);
     }
 }
