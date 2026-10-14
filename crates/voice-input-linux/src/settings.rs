@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LinuxAppSettings {
     pub double_press_window_ms: u64,
@@ -17,6 +17,25 @@ pub struct LinuxAppSettings {
     pub bridge_port: u16,
     /// 访问 token，32 位十六进制。空串表示尚未生成。
     pub bridge_token: String,
+}
+
+// 手写 Debug 而不 derive：bridge_token 是桥接监听器（0.0.0.0:8765，局域网/tailnet
+// 都能连）唯一的门禁，而日志最终会落到磁盘上的 journal，规范要求日志绝不记录敏感内容，
+// 所以这里只打印长度，绝不回显 token 明文。
+impl std::fmt::Debug for LinuxAppSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinuxAppSettings")
+            .field("double_press_window_ms", &self.double_press_window_ms)
+            .field("silence_stop_timeout_ms", &self.silence_stop_timeout_ms)
+            .field("mic_enabled", &self.mic_enabled)
+            .field("bridge_enabled", &self.bridge_enabled)
+            .field("bridge_port", &self.bridge_port)
+            .field(
+                "bridge_token",
+                &format_args!("<redacted; {} chars>", self.bridge_token.len()),
+            )
+            .finish()
+    }
 }
 
 impl Default for LinuxAppSettings {
@@ -50,8 +69,36 @@ impl LinuxAppSettings {
 
         let content =
             toml::to_string_pretty(self).map_err(|err| format!("序列化配置失败：{err}"))?;
-        fs::write(&path, content)
-            .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))
+
+        // 配置文件里带着 bridge_token，而桥接监听器绑在 0.0.0.0:8765，局域网和
+        // tailnet 都能连，token 是唯一门禁。本机 umask 通常是 0002，直接 fs::write
+        // 会落成 0664，任何本地用户都能读到 token，所以这里强制 0600。
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+            // mode(0o600) 只在「创建」时生效；对已存在的 0664 老文件它不会收紧权限，
+            // 所以打开后必须再显式 set_permissions(0o600)，否则老装机仍是全局可读。
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)
+                .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
+            file.write_all(content.as_bytes())
+                .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
+            Ok(())
+        }
+
+        #[cfg(not(unix))]
+        {
+            fs::write(&path, content)
+                .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))
+        }
     }
 }
 
@@ -106,5 +153,21 @@ mod tests {
     fn bridge_token_defaults_to_empty() {
         // 空 token 表示「尚未生成」，由 BridgeHandle 在启动时填充后落盘。
         assert_eq!(LinuxAppSettings::default().bridge_token, "");
+    }
+
+    #[test]
+    fn bridge_token_round_trips_through_toml() {
+        // 老配置没有 bridge_token 键，必须回落空串（兼容旧装机）。
+        let without_token = "double_press_window_ms = 300\n";
+        let settings: LinuxAppSettings =
+            toml::from_str(without_token).expect("缺 bridge_token 的老配置应当能反序列化");
+        assert_eq!(settings.bridge_token, "");
+
+        // 带 token 的配置必须原样读回，否则桥接会拿错凭证。
+        let token = "0123456789abcdef0123456789abcdef";
+        let with_token = format!("bridge_token = \"{token}\"\n");
+        let settings: LinuxAppSettings =
+            toml::from_str(&with_token).expect("带 bridge_token 的配置应当能反序列化");
+        assert_eq!(settings.bridge_token, token);
     }
 }
