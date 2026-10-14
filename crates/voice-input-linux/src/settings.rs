@@ -93,11 +93,18 @@ impl LinuxAppSettings {
                 .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
             file.write_all(content.as_bytes())
                 .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
+            // 必须 fsync：新生成的 token 就落在这份文件里，直接 drop 句柄只把它
+            // 交给内核回写窗口，此时崩溃/断电会丢 token，下次启动再生成一个新的，
+            // 手机上所有书签地址就全失效了。
+            file.sync_all()
+                .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
             Ok(())
         }
 
         #[cfg(not(unix))]
         {
+            // 非 unix 分支用 fs::write 一把梭，没法拿到文件句柄，也就无从 fsync。
+            // 该平台本来也没有 umask/权限那套顾虑，保持现状。
             fs::write(&path, content)
                 .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))
         }
