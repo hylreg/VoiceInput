@@ -503,7 +503,7 @@ mod linux_tray {
         use crate::settings::LinuxAppSettings;
         use crate::system_ime::SystemImeController;
         use std::cell::{Cell, RefCell};
-        use std::sync::atomic::AtomicBool;
+        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
         use std::time::Duration;
 
@@ -650,6 +650,34 @@ mod linux_tray {
             tray.toggle_mic();
 
             assert!(tray.mic_enabled.get());
+        }
+
+        #[test]
+        fn toggle_mic_updates_shared_state() {
+            // 主循环读的是共享 Arc<AtomicBool>，不是托盘里的 Cell。
+            // 只断言 Cell 的话，将来有人删掉 `.store(...)` 也不会有测试变红。
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            tray.toggle_mic();
+
+            assert!(!tray.mic_enabled.get(), "Cell 应当翻转");
+            assert!(
+                !tray.mic_enabled_shared.load(Ordering::SeqCst),
+                "共享状态必须同步翻转，否则主循环读到的还是旧值"
+            );
+        }
+
+        #[test]
+        fn toggle_bridge_updates_shared_state() {
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            tray.toggle_bridge();
+
+            assert!(!tray.bridge_enabled.get(), "Cell 应当翻转");
+            assert!(
+                !tray.bridge_enabled_shared.load(Ordering::SeqCst),
+                "共享状态必须同步翻转，否则桥接服务读到的还是旧值"
+            );
         }
 
         #[test]
