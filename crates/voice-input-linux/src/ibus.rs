@@ -85,6 +85,16 @@ pub fn read_clipboard_text() -> Option<String> {
 }
 
 /// 把文本写回剪贴板。失败时返回错误说明。
+///
+/// 调用顺序必须是「先 `read_clipboard_text` → 再注入 → 最后还原」。
+/// 注入后（即 arboard 自己持有选区期间）再调 `read_clipboard_text` 读到的是
+/// 我们自己刚写进去的内容，`Some("")` / `None` 的语义就失效了。
+///
+/// 与 `insert_indicator_and_save_clipboard` 不同，这里**不**持有
+/// `ClipboardRestoreGuard`：那个 guard 的作用是让连接活满整个 30s 录音周期。
+/// 手机注入是瞬时操作，且紧接着的 `insert_text_into_active_window` 会重新
+/// 建立连接，进程本身又是常驻的，所以内容不会丢。调用方不要「还原完就闲着」——
+/// 那点余量由剪贴板管理器兜底。
 #[cfg(feature = "ibus")]
 pub fn restore_clipboard_text(text: &str) -> Result<()> {
     let mut clipboard = arboard::Clipboard::new()
