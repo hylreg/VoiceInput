@@ -135,10 +135,13 @@ fn send_blank_text_is_bad_request() {
 }
 
 #[test]
-fn send_when_queue_full_is_too_many_requests() {
+fn too_many_concurrent_requests_is_too_many_requests() {
     let (_handle, addr, _rx) = test_bridge(true);
-    // 不排空队列。队列容量 8，第 9 个请求必然满。
-    // 每个请求会阻塞等待回票直到 2s 超时，所以并发发出后统一收结果。
+    // 不排空队列，并发发 9 个请求。现在触发 429 的是「并发连接上限」（8 个）：
+    // 第 9 个连接在 accept 时就被直接回 429。队列满那条分支（TrySendError::Full）
+    // 在此上限下已不可达，仅是纵深防御——≤8 个并发连接、每连接一个请求
+    // （Connection: close），队列的 8 格不可能被填满。
+    // 每个被接受请求会阻塞等待回票直到 2s 超时，所以并发发出后统一收结果。
     let mut threads = Vec::new();
     for _ in 0..9 {
         let addr = addr.clone();
