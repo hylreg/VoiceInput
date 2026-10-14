@@ -36,6 +36,20 @@
   }
   #history li.failed { background: #3a1f22; color: #ffb3b3; }
   #history time { color: #7a7a82; margin-right: 8px; }
+  /* 收到 401 时展开，让用户粘贴新地址换 token。默认收起。 */
+  #reconnect {
+    display: none; flex-direction: column; gap: 8px;
+    padding: 12px; border-radius: 10px; background: #3a1f22;
+  }
+  #reconnect.show { display: flex; }
+  #reconnect p { margin: 0; font-size: 13px; color: #ffb3b3; }
+  #reconnect input {
+    width: 100%; padding: 12px; border-radius: 10px;
+    background: #22232a; color: inherit; font: inherit;
+    border: 1px solid #34353d;
+  }
+  #reconnect input:focus { outline: 2px solid #4c8bf5; border-color: transparent; }
+  #reconnect button { padding: 14px; font-size: 16px; }
 </style>
 </head>
 <body>
@@ -43,6 +57,12 @@
 <p id="notice"></p>
 <textarea id="text" autofocus placeholder="用输入法的语音键说话，确认后点发送"></textarea>
 <button id="send">发送</button>
+<div id="reconnect">
+  <p>token 已变更，请从托盘重新复制地址</p>
+  <input id="newaddr" type="text" autocomplete="off" autocapitalize="off"
+         spellcheck="false" placeholder="粘贴托盘菜单复制的完整地址">
+  <button id="apply">使用新地址</button>
+</div>
 <ul id="history"></ul>
 <script>
 (function () {
@@ -50,12 +70,19 @@
   var SEND = document.getElementById('send');
   var NOTICE = document.getElementById('notice');
   var HISTORY = document.getElementById('history');
+  var RECONNECT = document.getElementById('reconnect');
+  var NEWADDR = document.getElementById('newaddr');
+  var APPLY = document.getElementById('apply');
   var LS_HISTORY = 'voiceinput.history';
   var LS_TOKEN = 'voiceinput.token';
 
-  function readFragmentToken() {
-    var match = /(?:^|[#&])k=([0-9a-fA-F]+)/.exec(location.hash || '');
+  function parseToken(text) {
+    var match = /(?:^|[#&])k=([0-9a-fA-F]+)/.exec(text || '');
     return match ? match[1] : '';
+  }
+
+  function readFragmentToken() {
+    return parseToken(location.hash || '');
   }
 
   // fragment 只发一次；存进 localStorage 之后开裸地址也能用。
@@ -102,6 +129,18 @@
     render();
   }
 
+  function showReconnect() {
+    RECONNECT.className = 'show';
+    SEND.disabled = true;
+    NEWADDR.focus();
+  }
+
+  function hideReconnect() {
+    RECONNECT.className = '';
+    NEWADDR.value = '';
+    SEND.disabled = false;
+  }
+
   function authHeaders() {
     return { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' };
   }
@@ -129,12 +168,14 @@
         });
       })
       .then(function (res) {
+        if (res.status === 401) { throw new Error('token 已变更，请从托盘菜单重新复制地址'); }
         return res.json().catch(function () { return {}; }).then(function (data) {
           if (res.ok) {
             push(text, false);
             TEXT.value = '';
             TEXT.focus();
             notice('已注入本机光标', 'ok');
+            SEND.disabled = false;
             return;
           }
           throw new Error(data.error || ('发送失败（' + res.status + '）'));
@@ -143,14 +184,36 @@
       .catch(function (err) {
         push(text, true);
         notice(err.message, 'error');
-      })
-      .then(function () { SEND.disabled = false; });
+        // GET /api/status 与 POST /send 的 401 都要展开粘贴框。
+        if (/token 已变更/.test(err.message)) { showReconnect(); return; }
+        SEND.disabled = false;
+      });
+  }
+
+  // 从粘贴的完整地址（或含 #k=... 的片段）里取 token，与 location.hash 同一套解析。
+  function applyNewAddress() {
+    var token = parseToken(NEWADDR.value.trim());
+    if (!token) {
+      // 保持区域展开，让用户接着改。
+      notice('没找到 token，请粘贴托盘菜单「复制外部输入地址」给出的完整链接', 'error');
+      RECONNECT.className = 'show';
+      return;
+    }
+    TOKEN = token;
+    try { localStorage.setItem(LS_TOKEN, token); }
+    catch (e) { /* 存不下也能用，只是下次开裸地址得重新粘 */ }
+    hideReconnect();
+    notice('已更新 token，可以继续发送', 'ok');
   }
 
   SEND.addEventListener('click', send);
+  APPLY.addEventListener('click', applyNewAddress);
   // 回车不发送：手机语音输入会插入换行，回车当发送必然误触。
   TEXT.addEventListener('keydown', function (event) {
     if (event.key === 'Enter') { event.preventDefault(); }
+  });
+  NEWADDR.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') { event.preventDefault(); applyNewAddress(); }
   });
 
   if (!TOKEN) {
