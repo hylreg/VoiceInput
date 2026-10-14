@@ -865,7 +865,7 @@ impl HttpResponse {
 
 Run: `cargo test -p voice-input-linux bridge_http::tests`
 
-Expected: `test result: ok. 44 passed`
+Expected: `test result: ok. 43 passed`
 
 - [ ] **Step 6: 提交**
 
