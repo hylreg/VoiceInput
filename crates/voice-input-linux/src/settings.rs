@@ -80,6 +80,8 @@ impl LinuxAppSettings {
 
             // mode(0o600) 只在「创建」时生效；对已存在的 0664 老文件它不会收紧权限，
             // 所以打开后必须再显式 set_permissions(0o600)，否则老装机仍是全局可读。
+            // 收紧必须排在 write_all 之前：老文件在写入期间仍是旧权限，先写后收紧会
+            // 留下一个 token 已落盘却全局可读的窗口。
             let mut file = fs::OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -87,9 +89,9 @@ impl LinuxAppSettings {
                 .mode(0o600)
                 .open(&path)
                 .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
-            file.write_all(content.as_bytes())
-                .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
+            file.write_all(content.as_bytes())
                 .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
             Ok(())
         }
