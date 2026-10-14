@@ -1,10 +1,10 @@
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::bridge_http::{
     char_count, json_field_text, normalize_text, parse_head, route, tokens_match, HttpResponse,
@@ -34,6 +34,10 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 /// 一次待注入的请求，由服务线程送给主循环。
 pub struct BridgeRequest {
     pub text: String,
+    /// 这条请求最迟可被注入的时刻。主循环在录音里可能一卡就是 30s，
+    /// 期间入队的请求，其 HTTP 客户端早已收到 503 并让用户重发——
+    /// 过期后仍注入就会与用户重发的那条重复。
+    pub deadline: Instant,
     /// 主循环处理后用它回票；错误串直接展示给用户。
     pub reply: SyncSender<std::result::Result<(), String>>,
 }
@@ -312,6 +316,9 @@ fn handle_send(
     let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
     let request = BridgeRequest {
         text,
+        // 与下面的 recv_timeout 同一个时限：超过这个点客户端已经收到 503，
+        // 主循环再注入就会和用户重发的那条重复。
+        deadline: Instant::now() + ACK_TIMEOUT,
         reply: reply_tx,
     };
 

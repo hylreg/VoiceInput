@@ -3,7 +3,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::bridge::{spawn_bridge, BridgeConfig, BridgeRequest, BridgeStatus, QUEUE_CAPACITY};
 use crate::bridge_addr::{detect_local_ipv4, generate_token};
@@ -111,10 +111,23 @@ fn is_filler_transcript(text: &str) -> bool {
 /// 文本走剪贴板粘贴路径，不还原的话用户正在复制的内容会被手机文字覆盖。
 /// 这里不调 `insert_indicator_and_save_clipboard`：那会在光标处插一个 ●，
 /// 而用户在手机上，看不到也不需要。
+///
+/// 过期的请求（`deadline` 已过）不注入：主循环在录音里可能一卡就是 30s，
+/// 期间入队的请求其 HTTP 客户端早已收到 503 并让用户重发，过期后仍注入
+/// 就会与用户重发的那条重复。过期的照常回 `Err(MSG_TIMEOUT)` 保持协议统一。
 fn drain_bridge_requests(rx: &Receiver<BridgeRequest>, host: &dyn InputMethodHost) -> usize {
     let mut injected = 0;
 
     while let Ok(request) = rx.try_recv() {
+        if Instant::now() >= request.deadline {
+            // 日志只记长度与结果，不记内容——手机语音可能包含密码或私事。
+            println!("手机输入：丢弃过期请求（{} 字）", char_count(&request.text));
+            let _ = request
+                .reply
+                .try_send(Err(crate::bridge_http::MSG_TIMEOUT.to_string()));
+            continue;
+        }
+
         let saved = crate::ibus::read_clipboard_text();
         let result = host.commit_text(&request.text);
         if let Some(previous) = crate::ibus::clipboard_text_to_restore(saved) {
@@ -437,6 +450,7 @@ mod tests {
     use crate::settings::LinuxAppSettings;
     use std::cell::RefCell;
     use std::sync::mpsc;
+    use std::time::{Duration, Instant};
     use voice_input_core::InputMethodHost;
 
     #[test]
@@ -488,6 +502,7 @@ mod tests {
             let (reply_tx, reply_rx) = mpsc::sync_channel(1);
             tx.try_send(BridgeRequest {
                 text: text.to_string(),
+                deadline: Instant::now() + Duration::from_secs(60),
                 reply: reply_tx,
             })
             .expect("入队应当成功");
@@ -527,6 +542,7 @@ mod tests {
             let (reply_tx, reply_rx) = mpsc::sync_channel(1);
             tx.try_send(BridgeRequest {
                 text: text.to_string(),
+                deadline: Instant::now() + Duration::from_secs(60),
                 reply: reply_tx,
             })
             .expect("入队应当成功");
@@ -553,11 +569,67 @@ mod tests {
         drop(reply_rx);
         tx.try_send(BridgeRequest {
             text: "内容".to_string(),
+            deadline: Instant::now() + Duration::from_secs(60),
             reply: reply_tx,
         })
         .expect("入队应当成功");
 
         assert_eq!(drain_bridge_requests(&rx, &host), 1);
+    }
+
+    #[test]
+    fn expired_request_is_not_injected() {
+        // 主循环可能卡在 30s 录音里，期间入队的请求客户端早已收到 503、
+        // 用户已经重发；过期后仍注入就是一条重复。
+        let host = RecordingHost::default();
+        let (tx, rx) = mpsc::sync_channel(8);
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        tx.try_send(BridgeRequest {
+            text: "过期的".to_string(),
+            deadline: Instant::now() - Duration::from_secs(1),
+            reply: reply_tx,
+        })
+        .expect("入队应当成功");
+
+        let injected = drain_bridge_requests(&rx, &host);
+
+        assert_eq!(injected, 0, "过期请求不计入注入数");
+        assert!(
+            host.committed.borrow().is_empty(),
+            "过期请求绝不能注入，实际：{:?}",
+            host.committed.borrow()
+        );
+        assert!(
+            reply_rx.try_recv().expect("过期也要回票").is_err(),
+            "过期请求回票必须是 Err，页面才不会把它当成成功"
+        );
+    }
+
+    #[test]
+    fn mixed_batch_injects_only_live_requests() {
+        let host = RecordingHost::default();
+        let (tx, rx) = mpsc::sync_channel(8);
+        let (expired_tx, expired_rx) = mpsc::sync_channel(1);
+        let (live_tx, live_rx) = mpsc::sync_channel(1);
+        tx.try_send(BridgeRequest {
+            text: "过期的".to_string(),
+            deadline: Instant::now() - Duration::from_secs(1),
+            reply: expired_tx,
+        })
+        .expect("入队应当成功");
+        tx.try_send(BridgeRequest {
+            text: "有效的".to_string(),
+            deadline: Instant::now() + Duration::from_secs(60),
+            reply: live_tx,
+        })
+        .expect("入队应当成功");
+
+        let injected = drain_bridge_requests(&rx, &host);
+
+        assert_eq!(injected, 1, "只应注入未过期的那条");
+        assert_eq!(host.committed.borrow().clone(), vec!["有效的"]);
+        assert!(expired_rx.try_recv().expect("过期要回票").is_err());
+        assert!(live_rx.try_recv().expect("有效要回票").is_ok());
     }
 
     #[test]
