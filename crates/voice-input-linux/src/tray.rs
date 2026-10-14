@@ -14,7 +14,7 @@ mod linux_tray {
     use crate::system_ime::SystemImeController;
     use voice_input_core::{Result, VoiceInputError};
 
-    #[derive(Debug, Clone)]
+    #[derive(Clone)]
     pub struct LinuxTrayConfig {
         pub service_name: String,
         pub title: String,
@@ -35,6 +35,33 @@ mod linux_tray {
         pub local_ip: Option<String>,
         /// 初始开关状态，用于预填托盘的本地副本。
         pub settings: LinuxAppSettings,
+    }
+
+    // 手写 Debug 而不 derive：`bridge_token` 是桥接监听器唯一的门禁，
+    // 日志最终落到磁盘上的 journal，规范要求日志绝不记录敏感内容。
+    // 与 settings.rs / bridge.rs 的取舍一致，只打印长度。
+    impl std::fmt::Debug for LinuxTrayConfig {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("LinuxTrayConfig")
+                .field("service_name", &self.service_name)
+                .field("title", &self.title)
+                .field("recorder", &self.recorder)
+                .field("quit_requested", &self.quit_requested)
+                .field("restart", &self.restart)
+                .field("restart_requested", &self.restart_requested)
+                .field("ime", &self.ime)
+                .field("mic_enabled", &self.mic_enabled)
+                .field("bridge_enabled", &self.bridge_enabled)
+                .field("bridge_available", &self.bridge_available)
+                .field("bridge_port", &self.bridge_port)
+                .field(
+                    "bridge_token",
+                    &format_args!("<redacted; {} chars>", self.bridge_token.len()),
+                )
+                .field("local_ip", &self.local_ip)
+                .field("settings", &self.settings)
+                .finish()
+        }
     }
 
     impl LinuxTrayConfig {
@@ -132,12 +159,21 @@ mod linux_tray {
         /// 每次点击都写盘会在目录被 inotify 监视时引发连锁反应，
         /// 而主循环反正每轮读内存变量，即时写盘对生效没有帮助。
         pub fn persist_settings(&self) {
-            let _ = self.handle.update(|tray| {
-                let snapshot = tray.settings.borrow().clone();
-                if let Err(err) = snapshot.save() {
-                    eprintln!("保存 Linux 配置失败：{err}");
-                }
-            });
+            // update 返回 None 表示状态栏服务已经退出（SNI 崩溃或连接已关）。
+            // 此时闭包根本没执行，只靠内层的 save() 报错是看不到的——
+            // 用户的开关会悄无声息地丢掉，所以这一层也必须报。
+            if self
+                .handle
+                .update(|tray| {
+                    let snapshot = tray.settings.borrow().clone();
+                    if let Err(err) = snapshot.save() {
+                        eprintln!("保存 Linux 配置失败：{err}");
+                    }
+                })
+                .is_none()
+            {
+                eprintln!("保存 Linux 配置失败：状态栏服务已退出，开关未落盘");
+            }
         }
 
         pub fn shutdown(&self) {
@@ -294,12 +330,15 @@ mod linux_tray {
 
         /// 地址在点击时现算——网卡是 DHCP 动态的，IP 会变。
         /// IP 探测失败时回落 127.0.0.1，方便在本机浏览器里验证页面本身。
-        fn address_url(&self) -> Option<String> {
+        ///
+        /// 返回 `String` 而非 `Option`：回落让「拼不出地址」不可能发生，
+        /// 用 `Option` 只会让每个调用方都写一段永远走不到的分支。
+        fn address_url(&self) -> String {
             let ip = self
                 .local_ip
                 .clone()
                 .unwrap_or_else(|| "127.0.0.1".to_string());
-            Some(bridge_url(&ip, self.bridge_port, &self.bridge_token))
+            bridge_url(&ip, self.bridge_port, &self.bridge_token)
         }
     }
 
@@ -412,10 +451,6 @@ mod linux_tray {
                     visible: true,
                     icon_name: "edit-copy".to_string(),
                     activate: Box::new(|tray: &mut LinuxTray| {
-                        let Some(url) = tray.address_url() else {
-                            eprintln!("复制外部输入地址失败：没有可用地址");
-                            return;
-                        };
                         // IP 探测失败时地址回落到 127.0.0.1：手机打不开，但本机浏览器
                         // 能验证页面是否正常。提示必须先于写剪贴板打印，才能在写失败时也看到。
                         if tray.local_ip.is_none() {
@@ -423,7 +458,7 @@ mod linux_tray {
                                 "外部输入地址：未探测到局域网 IP，已回退到 127.0.0.1（仅供本机浏览器验证）"
                             );
                         }
-                        match crate::ibus::restore_clipboard_text(&url) {
+                        match crate::ibus::restore_clipboard_text(&tray.address_url()) {
                             // 日志不记 URL 内容——里面含 token。
                             Ok(()) => println!("外部输入地址已复制到剪贴板"),
                             Err(err) => eprintln!("复制外部输入地址失败：{err}"),
@@ -753,20 +788,14 @@ mod linux_tray {
         fn address_url_uses_current_ip() {
             let tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
 
-            assert_eq!(
-                tray.address_url().as_deref(),
-                Some("http://10.0.0.5:8765/#k=abc123")
-            );
+            assert_eq!(tray.address_url(), "http://10.0.0.5:8765/#k=abc123");
         }
 
         #[test]
         fn address_url_falls_back_to_loopback_when_ip_unknown() {
             let tray = tray_with_bridge(MATCHING, false, true, true, true, None);
 
-            assert_eq!(
-                tray.address_url().as_deref(),
-                Some("http://127.0.0.1:8765/#k=abc123")
-            );
+            assert_eq!(tray.address_url(), "http://127.0.0.1:8765/#k=abc123");
         }
 
         #[test]
