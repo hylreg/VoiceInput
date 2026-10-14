@@ -7,6 +7,7 @@ pub struct LinuxLiveArgs {
     pub activation_hotkey: Option<String>,
     pub double_press_window_ms: Option<u64>,
     pub silence_stop_ms: Option<u64>,
+    pub bridge_port: Option<u16>,
 }
 
 impl Default for LinuxLiveArgs {
@@ -15,6 +16,7 @@ impl Default for LinuxLiveArgs {
             activation_hotkey: None,
             double_press_window_ms: None,
             silence_stop_ms: None,
+            bridge_port: None,
         }
     }
 }
@@ -42,9 +44,13 @@ pub fn run_live_with_args(args: LinuxLiveArgs) -> Result<(), String> {
         println!("静音自动停录已提升到更保守的下限：1500ms");
     }
 
+    let effective_bridge_port = args.bridge_port.unwrap_or(persisted_settings.bridge_port);
+    println!("手机输入端口：{effective_bridge_port}");
+
     let mut settings = persisted_settings;
     settings.double_press_window_ms = effective_window_ms;
     settings.silence_stop_timeout_ms = effective_silence_stop_ms;
+    settings.bridge_port = effective_bridge_port;
     if let Err(err) = settings.save() {
         eprintln!("保存 Linux 配置失败：{err}");
     }
@@ -57,6 +63,7 @@ pub fn run_live_with_args(args: LinuxLiveArgs) -> Result<(), String> {
         max_recording_duration: Duration::from_secs(30),
         double_press_window: Duration::from_millis(effective_window_ms),
         silence_stop_timeout: Duration::from_millis(effective_silence_stop_ms),
+        bridge_port: effective_bridge_port,
         ..Default::default()
     };
 
@@ -105,6 +112,18 @@ pub fn parse_live_args(args: Vec<String>) -> Result<LinuxLiveArgs, String> {
                         .parse::<u64>()
                         .map_err(|_| String::from("--silence-stop-ms 必须是整数毫秒"))?,
                 );
+            }
+            "--bridge-port" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| String::from("缺少 --bridge-port 的值"))?;
+                let port = value
+                    .parse::<u16>()
+                    .map_err(|_| String::from("--bridge-port 必须是端口号（1-65535）"))?;
+                if port == 0 {
+                    return Err(String::from("--bridge-port 不能是 0"));
+                }
+                parsed.bridge_port = Some(port);
             }
             "--help" | "-h" => return Err(String::from("help")),
             other => return Err(format!("不支持的参数：{other}")),
@@ -183,6 +202,86 @@ mod tests {
         .expect_err("fcitx5 后端应当被拒绝");
         assert!(
             err.contains("Fcitx5 路径还没有接入原生绑定"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_live_args_reads_bridge_port() {
+        let args = parse_live_args(vec![
+            "voice-input-linux-live".to_string(),
+            "--bridge-port".to_string(),
+            "9000".to_string(),
+        ])
+        .expect("--bridge-port 应当解析成功");
+
+        assert_eq!(args.bridge_port, Some(9000));
+    }
+
+    #[test]
+    fn parse_live_args_defaults_bridge_port_to_none() {
+        let args = parse_live_args(vec!["voice-input-linux-live".to_string()])
+            .expect("空参数应当解析成功");
+
+        assert_eq!(args.bridge_port, None);
+    }
+
+    #[test]
+    fn parse_live_args_rejects_non_numeric_bridge_port() {
+        let err = parse_live_args(vec![
+            "voice-input-linux-live".to_string(),
+            "--bridge-port".to_string(),
+            "abc".to_string(),
+        ])
+        .expect_err("非数字端口应当被拒绝");
+
+        assert!(
+            err.contains("--bridge-port 必须是端口号"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_live_args_rejects_port_above_u16() {
+        let err = parse_live_args(vec![
+            "voice-input-linux-live".to_string(),
+            "--bridge-port".to_string(),
+            "70000".to_string(),
+        ])
+        .expect_err("超出 u16 的端口应当被拒绝");
+
+        assert!(
+            err.contains("--bridge-port 必须是端口号"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_live_args_rejects_port_zero() {
+        // 0 会被系统随机分配，用户以为指定了端口但实际不是，宁可直接报错。
+        let err = parse_live_args(vec![
+            "voice-input-linux-live".to_string(),
+            "--bridge-port".to_string(),
+            "0".to_string(),
+        ])
+        .expect_err("0 端口应当被拒绝");
+
+        assert!(
+            err.contains("--bridge-port 不能是 0"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_live_args_requires_bridge_port_value() {
+        let err = parse_live_args(vec![
+            "voice-input-linux-live".to_string(),
+            "--bridge-port".to_string(),
+        ])
+        .expect_err("缺少值应当被拒绝");
+
+        assert!(
+            err.contains("缺少 --bridge-port 的值"),
             "unexpected error: {err}"
         );
     }
