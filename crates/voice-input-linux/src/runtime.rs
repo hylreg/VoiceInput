@@ -345,12 +345,9 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
 
     let local_ip = detect_local_ipv4().map(|ip| ip.to_string());
     if let Some(ref handle) = bridge {
-        let display_ip = local_ip.clone().unwrap_or_else(|| "127.0.0.1".to_string());
+        // 只打端口，不打地址——地址里带 token，而 journal 是落盘的。
+        // 需要地址时从托盘菜单「复制外部输入地址」取。
         println!("手机输入已就绪，监听端口 {}", handle.local_addr().port());
-        println!(
-            "手机地址（托盘菜单可复制）：{}",
-            crate::bridge_addr::bridge_url(&display_ip, handle.local_addr().port(), &setup.token)
-        );
     }
 
     let tray = if config.show_status_item {
