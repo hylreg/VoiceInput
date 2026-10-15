@@ -187,6 +187,7 @@ impl HttpResponse {
             "HTTP/1.1 {} {}\r\n\
              Content-Type: {}; charset=utf-8\r\n\
              Content-Length: {}\r\n\
+             Cache-Control: no-store\r\n\
              Connection: close\r\n\
              \r\n\
              {}",
@@ -463,6 +464,18 @@ mod tests {
             "实际：{rendered}"
         );
         assert!(rendered.ends_with(r#"{"ok":true}"#), "实际：{rendered}");
+    }
+
+    #[test]
+    fn render_forbids_caching() {
+        // 手机浏览器缓存住旧页面时，会继续用旧的自动发送逻辑，
+        // 而且我们在服务端改了行为它也不会知道。
+        let rendered = HttpResponse::html("<p>x</p>".to_string()).render();
+
+        assert!(
+            rendered.contains("Cache-Control: no-store\r\n"),
+            "实际：{rendered}"
+        );
     }
 
     #[test]
