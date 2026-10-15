@@ -167,15 +167,19 @@ pub struct BridgeSetupConfig {
 #[derive(Debug, Clone)]
 pub struct BridgeSetup {
     pub token: String,
+    /// token 是本次新生成的（配置里原本没有）。调用方据此决定要不要落盘。
+    pub token_is_new: bool,
     pub settings: LinuxAppSettings,
 }
 
 /// 决定 token 与生效 settings。
 ///
-/// token 缺失时生成一个新的并写回 settings——这一点必须落盘，
-/// 否则每次重启都换 token，手机上存的地址全部失效。
+/// token 缺失时生成一个新的并写回 settings。**`run_live_app` 必须在
+/// `token_is_new` 为真时把它落盘**——落盘不在本函数里，因为本函数是纯函数、
+/// 要能单测；少了那一步，每次重启都会换一个新 token，手机上存的地址全部失效。
 pub fn prepare_bridge(config: BridgeSetupConfig) -> BridgeSetup {
-    let token = if config.stored_token.trim().is_empty() {
+    let token_is_new = config.stored_token.trim().is_empty();
+    let token = if token_is_new {
         generate_token()
     } else {
         config.stored_token
@@ -190,7 +194,11 @@ pub fn prepare_bridge(config: BridgeSetupConfig) -> BridgeSetup {
         settings.bridge_enabled = false;
     }
 
-    BridgeSetup { token, settings }
+    BridgeSetup {
+        token,
+        token_is_new,
+        settings,
+    }
 }
 
 fn run_recording_cycle(
@@ -318,6 +326,16 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
         stored_token: saved_settings.bridge_token.clone(),
         saved_settings,
     });
+    // 新生成的 token 必须立刻落盘。`live_cli` 那次 save() 发生在 `prepare_bridge`
+    // 之前，写下的还是空串；少了这一处，每次重启都会换一个新 token，手机上存的
+    // 地址和书签全部失效——这正是 `prepare_bridge` 约定要落盘的那份状态。
+    // 只在真的生成了新 token 时写盘，避免每次启动都无谓地 fsync 一次配置目录。
+    if setup.token_is_new {
+        if let Err(err) = setup.settings.save() {
+            // 不升级为启动失败：token 本次仍然可用，只是下次重启会再换一个。
+            eprintln!("保存 Linux 配置失败：{err}");
+        }
+    }
     let mic_enabled = Arc::new(AtomicBool::new(setup.settings.mic_enabled));
     let bridge_enabled = Arc::new(AtomicBool::new(setup.settings.bridge_enabled));
 
@@ -659,6 +677,27 @@ mod tests {
         let setup = prepare_bridge(config);
 
         assert_eq!(setup.token, "storedtoken");
+    }
+
+    #[test]
+    fn bridge_setup_marks_fresh_token_as_new() {
+        // 调用方靠这个标志决定要不要落盘。漏了它，新 token 就只活在内存里，
+        // 每次重启换一个，手机上存的地址全部失效。
+        let missing = prepare_bridge(BridgeSetupConfig {
+            enabled_in_settings: true,
+            port: 8765,
+            stored_token: String::new(),
+            saved_settings: LinuxAppSettings::default(),
+        });
+        assert!(missing.token_is_new, "没有旧 token 时必须标记为新的");
+
+        let reused = prepare_bridge(BridgeSetupConfig {
+            enabled_in_settings: true,
+            port: 8765,
+            stored_token: "storedtoken".to_string(),
+            saved_settings: LinuxAppSettings::default(),
+        });
+        assert!(!reused.token_is_new, "沿用旧 token 时不该重复写盘");
     }
 
     #[test]
