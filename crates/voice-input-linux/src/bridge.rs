@@ -7,8 +7,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::bridge_http::{
-    char_count, json_field_text, normalize_text, parse_head, route, tokens_match, HttpResponse,
-    Route, MAX_BODY_BYTES, MAX_TEXT_CHARS, MSG_BRIDGE_DISABLED, MSG_BUSY, MSG_EMPTY,
+    char_count, json_field_text, normalize_text, parse_head, route, split_prefix, tokens_match,
+    HttpResponse, Route, MAX_BODY_BYTES, MAX_TEXT_CHARS, MSG_BRIDGE_DISABLED, MSG_BUSY, MSG_EMPTY,
     MSG_INJECT_FAILED, MSG_TIMEOUT, MSG_TOO_LONG, MSG_UNAUTHORIZED,
 };
 use crate::recorder::LinuxMicAudioRecorder;
@@ -304,14 +304,20 @@ fn build_response(
         return HttpResponse::error(400, "请求头无法解析");
     };
 
-    match route(&parsed.method, &parsed.path) {
+    // 口令是路径第一段，所以鉴权在这里做一次，下面的路由只看到剩下的部分。
+    // 先鉴权后路由是刻意的：这样「口令不对」与「路径不存在」不会互相暴露——
+    // 否则攻击者能靠「404 还是 401」把口令的正确前缀一段段试出来。
+    // 代价是裸 `/` 也回 401（它的口令段是空串），页面拿不到任何提示，
+    // 但裸 `/` 本来就不是给人看的地址。
+    let (prefix, rest) = split_prefix(&parsed.path);
+    if !tokens_match(&status.token(), prefix) {
+        return HttpResponse::error(401, MSG_UNAUTHORIZED);
+    }
+
+    match route(&parsed.method, rest) {
         Route::NotFound => HttpResponse::error(404, "未知路径"),
         Route::Page => HttpResponse::html(crate::bridge_page::PAGE.to_string()),
         Route::Status => {
-            let provided = parsed.token.as_deref().unwrap_or("");
-            if !tokens_match(&status.token(), provided) {
-                return HttpResponse::error(401, MSG_UNAUTHORIZED);
-            }
             let body = format!(
                 r#"{{"mic_recording":{},"bridge_enabled":{}}}"#,
                 status.mic_recording(),
@@ -333,11 +339,6 @@ fn handle_send(
     status: &BridgeStatus,
     sender: &SyncSender<BridgeRequest>,
 ) -> HttpResponse {
-    let provided = parsed.token.as_deref().unwrap_or("");
-    if !tokens_match(&status.token(), provided) {
-        return HttpResponse::error(401, MSG_UNAUTHORIZED);
-    }
-
     if !status.bridge_enabled.load(Ordering::SeqCst) {
         return HttpResponse::error(409, MSG_BRIDGE_DISABLED);
     }

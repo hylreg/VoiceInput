@@ -13,15 +13,19 @@ pub struct LinuxAppSettings {
     pub mic_enabled: bool,
     /// 手机桥接是否生效。关掉时端口仍监听，POST /send 返回 409。
     pub bridge_enabled: bool,
-    /// 桥接监听端口。IP 不落盘——网卡是 DHCP 动态的，每次用时现算。
+    /// 桥接监听端口。
     pub bridge_port: u16,
-    /// 访问 token，32 位十六进制。空串表示尚未生成。
+    /// 手机端地址里的口令，同时也是路径第一段。8-32 位 ASCII 字母数字与 `-_`。
+    /// 空串表示尚未生成。
     pub bridge_token: String,
+    /// 手机端地址用的稳定主机名（如 tailnet 名）。空串表示没设，届时回落到
+    /// 本机探测到的 IP。**刻意不自动填 IP**——IP 是 DHCP 动态的，写进去就是错的。
+    pub bridge_host: String,
 }
 
 // 手写 Debug 而不 derive：bridge_token 是桥接监听器（0.0.0.0:8765，局域网/tailnet
 // 都能连）唯一的门禁，而日志最终会落到磁盘上的 journal，规范要求日志绝不记录敏感内容，
-// 所以这里只打印长度，绝不回显 token 明文。
+// 所以这里只打印长度，绝不回显口令明文。
 impl std::fmt::Debug for LinuxAppSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LinuxAppSettings")
@@ -34,6 +38,8 @@ impl std::fmt::Debug for LinuxAppSettings {
                 "bridge_token",
                 &format_args!("<redacted; {} chars>", self.bridge_token.len()),
             )
+            // 主机名不是秘密，直接打出来——排查「手机打不开」时要看的就是它。
+            .field("bridge_host", &self.bridge_host)
             .finish()
     }
 }
@@ -47,6 +53,7 @@ impl Default for LinuxAppSettings {
             bridge_enabled: true,
             bridge_port: 8765,
             bridge_token: String::new(),
+            bridge_host: String::new(),
         }
     }
 }
@@ -71,8 +78,8 @@ impl LinuxAppSettings {
             toml::to_string_pretty(self).map_err(|err| format!("序列化配置失败：{err}"))?;
 
         // 配置文件里带着 bridge_token，而桥接监听器绑在 0.0.0.0:8765，局域网和
-        // tailnet 都能连，token 是唯一门禁。本机 umask 通常是 0002，直接 fs::write
-        // 会落成 0664，任何本地用户都能读到 token，所以这里强制 0600。
+        // tailnet 都能连，口令是唯一门禁。本机 umask 通常是 0002，直接 fs::write
+        // 会落成 0664，任何本地用户都能读到口令，所以这里强制 0600。
         #[cfg(unix)]
         {
             use std::io::Write;
@@ -93,8 +100,8 @@ impl LinuxAppSettings {
                 .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
             file.write_all(content.as_bytes())
                 .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
-            // 必须 fsync：新生成的 token 就落在这份文件里，直接 drop 句柄只把它
-            // 交给内核回写窗口，此时崩溃/断电会丢 token，下次启动再生成一个新的，
+            // 必须 fsync：新生成的口令就落在这份文件里，直接 drop 句柄只把它
+            // 交给内核回写窗口，此时崩溃/断电会丢口令，下次启动再生成一个新的，
             // 手机上所有书签地址就全失效了。
             file.sync_all()
                 .map_err(|err| format!("写入配置文件失败 {}：{err}", path.display()))?;
@@ -160,7 +167,7 @@ mod tests {
 
     #[test]
     fn bridge_token_defaults_to_empty() {
-        // 空 token 表示「尚未生成」，由 BridgeHandle 在启动时填充后落盘。
+        // 空串表示「尚未生成」，由 prepare_bridge 在启动时填充后落盘。
         assert_eq!(LinuxAppSettings::default().bridge_token, "");
     }
 
@@ -172,11 +179,49 @@ mod tests {
             toml::from_str(without_token).expect("缺 bridge_token 的老配置应当能反序列化");
         assert_eq!(settings.bridge_token, "");
 
-        // 带 token 的配置必须原样读回，否则桥接会拿错凭证。
-        let token = "0123456789abcdef0123456789abcdef";
+        // 带口令的配置必须原样读回，否则桥接会拿错凭证。
+        let token = "lanhexin";
         let with_token = format!("bridge_token = \"{token}\"\n");
         let settings: LinuxAppSettings =
             toml::from_str(&with_token).expect("带 bridge_token 的配置应当能反序列化");
         assert_eq!(settings.bridge_token, token);
+    }
+
+    #[test]
+    fn bridge_host_defaults_to_empty() {
+        // 空串是「没设，用探测到的 IP」的哨兵。默认绝不能填 IP——
+        // IP 是 DHCP 动态的，写进配置第二天就是错的。
+        assert_eq!(LinuxAppSettings::default().bridge_host, "");
+    }
+
+    #[test]
+    fn bridge_host_round_trips_through_toml() {
+        let without_host = "bridge_port = 8765\n";
+        let settings: LinuxAppSettings =
+            toml::from_str(without_host).expect("缺 bridge_host 的老配置应当能反序列化");
+        assert_eq!(settings.bridge_host, "");
+
+        let with_host = "bridge_host = \"leju.tail3e3e47.ts.net\"\n";
+        let settings: LinuxAppSettings =
+            toml::from_str(with_host).expect("带 bridge_host 的配置应当能反序列化");
+        assert_eq!(settings.bridge_host, "leju.tail3e3e47.ts.net");
+    }
+
+    #[test]
+    fn debug_redacts_pass_phrase_but_shows_host() {
+        // 口令是门禁，日志落盘，绝不回显；主机名不是秘密，排查「手机打不开」要看它。
+        let settings = LinuxAppSettings {
+            bridge_token: "lanhexin".to_string(),
+            bridge_host: "leju.tail3e3e47.ts.net".to_string(),
+            ..LinuxAppSettings::default()
+        };
+
+        let rendered = format!("{settings:?}");
+        assert!(!rendered.contains("lanhexin"), "实际：{rendered}");
+        assert!(rendered.contains("<redacted; 8 chars>"), "实际：{rendered}");
+        assert!(
+            rendered.contains("leju.tail3e3e47.ts.net"),
+            "实际：{rendered}"
+        );
     }
 }

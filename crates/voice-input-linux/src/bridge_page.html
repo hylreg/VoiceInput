@@ -42,7 +42,7 @@
   }
   #history li.failed { background: #3a1f22; color: #ffb3b3; }
   #history time { color: #7a7a82; margin-right: 8px; }
-  /* 收到 401 时展开，让用户粘贴新地址换 token。默认收起。 */
+  /* 收到 401 时展开，让用户粘贴新地址换口令。默认收起。 */
   #reconnect {
     display: none; flex-direction: column; gap: 8px;
     padding: 12px; border-radius: 10px; background: #3a1f22;
@@ -68,7 +68,7 @@
 </label>
 <button id="send">发送</button>
 <div id="reconnect">
-  <p>token 已变更，请从托盘重新复制地址</p>
+  <p>口令已变更，请从托盘重新复制地址</p>
   <input id="newaddr" type="text" autocomplete="off" autocapitalize="off"
          spellcheck="false" placeholder="粘贴托盘菜单复制的完整地址">
   <button id="apply">使用新地址</button>
@@ -85,7 +85,6 @@
   var NEWADDR = document.getElementById('newaddr');
   var APPLY = document.getElementById('apply');
   var LS_HISTORY = 'voiceinput.history';
-  var LS_TOKEN = 'voiceinput.token';
   var LS_AUTO = 'voiceinput.auto';
   // 首选信号是 compositionend——手机输入法录完一段会发它，我们不必再等静默。
   // IDLE_MS 是兜底：不发这个事件的输入法、以及纯手打，都靠停笔判定。
@@ -108,19 +107,17 @@
   // 半截话，直接发会把新一句和它拼在一起注入。要用户改一笔才恢复。
   var autoHalted = false;
 
-  function parseToken(text) {
-    var match = /(?:^|[#&])k=([0-9a-fA-F]+)/.exec(text || '');
-    return match ? match[1] : '';
-  }
+  // 页面的地址就是凭据：口令是路径第一段，接口挂在同一层。
+  // 用相对地址发请求，换口令、换主机都不用改页面。末尾补斜杠，
+  // 好让用户手打的 /<口令>（不带斜杠）也能解析出同一个基准。
+  var BASE = location.pathname;
+  if (BASE.charAt(BASE.length - 1) !== '/') { BASE += '/'; }
+  // 路径第一段就是口令。拿到手只为判空——真正认它的是服务端。
+  var PREFIX = BASE.split('/')[1] || '';
 
-  function readFragmentToken() {
-    return parseToken(location.hash || '');
-  }
-
-  // fragment 只发一次；存进 localStorage 之后开裸地址也能用。
-  var fragmentToken = readFragmentToken();
-  if (fragmentToken) { localStorage.setItem(LS_TOKEN, fragmentToken); }
-  var TOKEN = fragmentToken || localStorage.getItem(LS_TOKEN) || '';
+  // 服务端在口令不对时回 401。文案与服务端 MSG_UNAUTHORIZED 保持一致，
+  // 客户端用同一条常量比对，改文案时不会漏掉这一处。
+  var AUTH_FAILED = '口令已变更，请从托盘菜单重新复制地址';
 
   function notice(text, kind) {
     NOTICE.textContent = text || '';
@@ -173,22 +170,19 @@
     NEWADDR.focus();
   }
 
-  function hideReconnect() {
-    RECONNECT.className = '';
-    NEWADDR.value = '';
-    SEND.disabled = false;
-    AUTO.disabled = false;
-  }
+  // 没有 hideReconnect 了：换地址走整页跳转，重新加载后粘贴框本来就是收起的。
 
+  // 口令在路径里，所以不再需要任何鉴权头：请求打到 BASE 下就是凭据本身。
+  // Content-Type 只有 POST 需要，但统一带上无副作用（同源，不触发预检）。
   function authHeaders() {
-    return { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' };
+    return { 'Content-Type': 'application/json' };
   }
 
   // ---- 自动发送：输入法报「输入完成」就发；不发这个事件时靠停笔兜底 ----
 
   // 能不能自动发。两个容易写错的地方：
-  //   1. 用 AUTO.disabled 而不是只看 AUTO.checked——token 失效时只是把开关置灰，
-  //      checked 仍是 true，光看它会在用户粘新地址时继续发。
+  //   1. 用 AUTO.disabled 而不是只看 AUTO.checked——口令失效时只是把开关置灰，
+  //      checked 仍是 true，光看它会在用户换地址时继续发。
   //   2. composing / autoHalted 期间一律不发，理由见各自的注释。
   function canAutoSend() {
     return AUTO.checked && !AUTO.disabled && !busy && !composing &&
@@ -253,9 +247,9 @@
     busy = true;
     notice('检查本机状态…');
 
-    fetch('/api/status', { headers: authHeaders() })
+    fetch(BASE + 'api/status', { headers: authHeaders() })
       .then(function (res) {
-        if (res.status === 401) { throw new Error('token 已变更，请从托盘菜单重新复制地址'); }
+        if (res.status === 401) { throw new Error(AUTH_FAILED); }
         if (!res.ok) { throw new Error('状态查询失败（' + res.status + '）'); }
         return res.json();
       })
@@ -263,14 +257,14 @@
         if (!state.bridge_enabled) { throw new Error('手机输入已关闭，请在托盘菜单里开启'); }
         if (state.mic_recording) { throw new Error('本机正在录音，稍后重试'); }
         notice('发送中…');
-        return fetch('/send', {
+        return fetch(BASE + 'send', {
           method: 'POST',
           headers: authHeaders(),
           body: JSON.stringify({ text: text })
         });
       })
       .then(function (res) {
-        if (res.status === 401) { throw new Error('token 已变更，请从托盘菜单重新复制地址'); }
+        if (res.status === 401) { throw new Error(AUTH_FAILED); }
         return res.json().catch(function () { return {}; }).then(function (data) {
           if (res.ok) {
             push(text, false);
@@ -298,9 +292,9 @@
         busy = false;
         // GET /api/status 与 POST /send 的 401 都要展开粘贴框。
         // 这条路径不算自动发送失败：闩留给下面那些「重试一下就能好」的错。
-        if (/token 已变更/.test(err.message)) { showReconnect(); return; }
+        if (err.message === AUTH_FAILED) { showReconnect(); return; }
         SEND.disabled = false;
-        // 自动发送失败不重试——否则本机录音中或 token 失效会变成死循环刷屏。
+        // 自动发送失败不重试——否则本机录音中或口令失效会变成死循环刷屏。
         // 而且这句没发出去的话还留在输入框里，再自动发会把下一句和它拼在
         // 一起注入。置上闩，等用户明确处理。
         autoHalted = true;
@@ -312,20 +306,18 @@
       });
   }
 
-  // 从粘贴的完整地址（或含 #k=... 的片段）里取 token，与 location.hash 同一套解析。
+  // 口令在路径里，换口令等于换页面地址——只有重新加载才有意义
+  // （新口令得由服务端在路由里认，改内存里的变量是改不出来的）。
   function applyNewAddress() {
-    var token = parseToken(NEWADDR.value.trim());
-    if (!token) {
+    var addr = NEWADDR.value.trim();
+    if (!/^https?:\/\/[^/]+\/.+/.test(addr)) {
       // 保持区域展开，让用户接着改。
-      notice('没找到 token，请粘贴托盘菜单「复制外部输入地址」给出的完整链接', 'error');
+      notice('地址不对，请粘贴托盘菜单「复制外部输入地址」给出的完整链接', 'error');
       RECONNECT.className = 'show';
       return;
     }
-    TOKEN = token;
-    try { localStorage.setItem(LS_TOKEN, token); }
-    catch (e) { /* 存不下也能用，只是下次开裸地址得重新粘 */ }
-    hideReconnect();
-    notice('已更新 token，可以继续发送', 'ok');
+    // 直接跳转，不做任何本地状态清理——重新加载后一切都是新的。
+    location.href = addr;
   }
 
   SEND.addEventListener('click', send);
@@ -397,8 +389,10 @@
   catch (e) { /* 读不到就用默认 */ }
   AUTO.checked = autoStored === null ? true : autoStored === '1';
 
-  if (!TOKEN) {
-    notice('缺少 token，请用托盘菜单「复制外部输入地址」给出的完整链接打开', 'error');
+  if (!PREFIX) {
+    // 口令就在路径第一段。走到这里说明地址压根没带口令段（例如只开了裸地址），
+    // 服务端其实已经在路由之前回 401 了，这段是给「页面被本地存下来又打开」兜底。
+    notice('地址不完整，请用托盘菜单「复制外部输入地址」给出的完整链接打开', 'error');
     SEND.disabled = true;
     AUTO.disabled = true;
   }

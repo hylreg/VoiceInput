@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,7 +9,8 @@ use voice_input_linux::{
     spawn_bridge, BridgeConfig, BridgeRequest, BridgeStatus, LinuxMicAudioRecorder,
 };
 
-const TOKEN: &str = "deadbeefdeadbeefdeadbeefdeadbeef";
+/// 口令，同时也是 URL 路径的第一段。
+const PASS: &str = "lanhexin";
 
 /// 起一个测试用桥接服务，绑 0 端口。返回服务句柄、连接地址、接收端。
 fn test_bridge(
@@ -21,7 +22,7 @@ fn test_bridge(
 ) {
     let status = Arc::new(BridgeStatus::new(
         Arc::new(AtomicBool::new(enabled)),
-        TOKEN.to_string(),
+        PASS.to_string(),
         LinuxMicAudioRecorder::new(Duration::from_secs(30)),
     ));
     let (sender, receiver) = mpsc::sync_channel(8);
@@ -46,21 +47,25 @@ fn raw_request(addr: &str, request: &str) -> String {
     response
 }
 
-fn send_request(addr: &str, token: &str, body: &str) -> String {
+/// 用给定口令前缀发一次 `/send`。口令是路径第一段，不再有任何鉴权头。
+fn send_request(addr: &str, pass: &str, body: &str) -> String {
     raw_request(
         addr,
         &format!(
-            "POST /send HTTP/1.1\r\nHost: x\r\nX-Auth-Token: {token}\r\nContent-Length: {}\r\n\r\n{body}",
+            "POST /{pass}/send HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         ),
     )
 }
 
 #[test]
-fn page_is_public() {
+fn page_is_served_under_the_pass_phrase() {
     let (_handle, addr, _rx) = test_bridge(true);
 
-    let response = raw_request(addr.as_str(), "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    let response = raw_request(
+        addr.as_str(),
+        &format!("GET /{PASS}/ HTTP/1.1\r\nHost: x\r\n\r\n"),
+    );
 
     assert!(
         response.starts_with("HTTP/1.1 200 OK\r\n"),
@@ -76,7 +81,59 @@ fn page_is_public() {
 }
 
 #[test]
-fn send_with_valid_token_is_queued_and_acked() {
+fn page_is_served_without_trailing_slash() {
+    // 用户手打地址时不会带尾斜杠。省掉它页面就成 404 了，体验上很莫名。
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let response = raw_request(
+        addr.as_str(),
+        &format!("GET /{PASS} HTTP/1.1\r\nHost: x\r\n\r\n"),
+    );
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK\r\n"),
+        "实际：{response}"
+    );
+}
+
+#[test]
+fn bare_root_is_unauthorized() {
+    // 裸 `/` 的口令段是空串。它既不是合法口令，页面也没法从中知道该打哪儿去，
+    // 所以跟口令错一样回 401。
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let response = raw_request(addr.as_str(), "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+
+    assert!(response.starts_with("HTTP/1.1 401 "), "实际：{response}");
+}
+
+#[test]
+fn wrong_pass_phrase_is_unauthorized() {
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let response = raw_request(addr.as_str(), "GET /nope/ HTTP/1.1\r\nHost: x\r\n\r\n");
+
+    assert!(response.starts_with("HTTP/1.1 401 "), "实际：{response}");
+}
+
+#[test]
+fn wrong_pass_phrase_does_not_leak_path_existence() {
+    // 先鉴权后路由：口令不对时，路径对不对都是 401，攻击者没法靠
+    // 「404 还是 401」把口令一段段试出来。
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let real_path = raw_request(addr.as_str(), "GET /nope/send HTTP/1.1\r\nHost: x\r\n\r\n");
+    let fake_path = raw_request(
+        addr.as_str(),
+        "GET /nope/whatever HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+
+    assert!(real_path.starts_with("HTTP/1.1 401 "), "实际：{real_path}");
+    assert!(fake_path.starts_with("HTTP/1.1 401 "), "实际：{fake_path}");
+}
+
+#[test]
+fn send_with_valid_pass_phrase_is_queued_and_acked() {
     let (_handle, addr, rx) = test_bridge(true);
 
     // 主循环的替身：收下请求并回票成功。
@@ -86,7 +143,7 @@ fn send_with_valid_token_is_queued_and_acked() {
         request.reply.send(Ok(())).expect("回票应当成功");
     });
 
-    let response = send_request(&addr, TOKEN, r#"{"text":"你好世界"}"#);
+    let response = send_request(&addr, PASS, r#"{"text":"你好世界"}"#);
 
     worker.join().expect("worker 线程应当正常结束");
     assert!(
@@ -97,10 +154,10 @@ fn send_with_valid_token_is_queued_and_acked() {
 }
 
 #[test]
-fn send_without_token_is_unauthorized() {
+fn send_with_wrong_pass_phrase_is_unauthorized() {
     let (_handle, addr, _rx) = test_bridge(true);
 
-    let response = send_request(&addr, "wrong-token", r#"{"text":"x"}"#);
+    let response = send_request(&addr, "wrongpass", r#"{"text":"x"}"#);
 
     assert!(response.starts_with("HTTP/1.1 401 "), "实际：{response}");
 }
@@ -109,7 +166,7 @@ fn send_without_token_is_unauthorized() {
 fn send_when_disabled_is_conflict() {
     let (_handle, addr, _rx) = test_bridge(false);
 
-    let response = send_request(&addr, TOKEN, r#"{"text":"x"}"#);
+    let response = send_request(&addr, PASS, r#"{"text":"x"}"#);
 
     assert!(response.starts_with("HTTP/1.1 409 "), "实际：{response}");
 }
@@ -120,7 +177,7 @@ fn send_too_long_is_payload_too_large() {
     let long = "字".repeat(501);
     let body = format!(r#"{{"text":"{long}"}}"#);
 
-    let response = send_request(&addr, TOKEN, &body);
+    let response = send_request(&addr, PASS, &body);
 
     assert!(response.starts_with("HTTP/1.1 413 "), "实际：{response}");
 }
@@ -129,7 +186,7 @@ fn send_too_long_is_payload_too_large() {
 fn send_blank_text_is_bad_request() {
     let (_handle, addr, _rx) = test_bridge(true);
 
-    let response = send_request(&addr, TOKEN, r#"{"text":"   \n  "}"#);
+    let response = send_request(&addr, PASS, r#"{"text":"   \n  "}"#);
 
     assert!(response.starts_with("HTTP/1.1 400 "), "实际：{response}");
 }
@@ -146,7 +203,7 @@ fn too_many_concurrent_requests_is_too_many_requests() {
     for _ in 0..9 {
         let addr = addr.clone();
         threads.push(std::thread::spawn(move || {
-            send_request(&addr, TOKEN, r#"{"text":"x"}"#)
+            send_request(&addr, PASS, r#"{"text":"x"}"#)
         }));
     }
 
@@ -166,7 +223,7 @@ fn send_when_worker_never_acks_is_service_unavailable() {
     let (_handle, addr, _rx) = test_bridge(true);
     // 主循环替身缺失：请求进了队列但没人回票，2s 后应当超时。
 
-    let response = send_request(&addr, TOKEN, r#"{"text":"x"}"#);
+    let response = send_request(&addr, PASS, r#"{"text":"x"}"#);
 
     assert!(response.starts_with("HTTP/1.1 503 "), "实际：{response}");
 }
@@ -177,7 +234,7 @@ fn status_reports_mic_and_bridge_state() {
 
     let response = raw_request(
         addr.as_str(),
-        &format!("GET /api/status HTTP/1.1\r\nHost: x\r\nX-Auth-Token: {TOKEN}\r\n\r\n"),
+        &format!("GET /{PASS}/api/status HTTP/1.1\r\nHost: x\r\n\r\n"),
     );
 
     assert!(
@@ -195,10 +252,25 @@ fn status_reports_mic_and_bridge_state() {
 }
 
 #[test]
-fn unknown_path_is_not_found() {
+fn status_with_wrong_pass_phrase_is_unauthorized() {
     let (_handle, addr, _rx) = test_bridge(true);
 
-    let response = raw_request(addr.as_str(), "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n");
+    let response = raw_request(
+        addr.as_str(),
+        "GET /nope/api/status HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+
+    assert!(response.starts_with("HTTP/1.1 401 "), "实际：{response}");
+}
+
+#[test]
+fn unknown_path_under_right_pass_phrase_is_not_found() {
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let response = raw_request(
+        addr.as_str(),
+        &format!("GET /{PASS}/nope HTTP/1.1\r\nHost: x\r\n\r\n"),
+    );
 
     assert!(response.starts_with("HTTP/1.1 404 "), "实际：{response}");
 }
@@ -207,7 +279,10 @@ fn unknown_path_is_not_found() {
 fn response_always_closes_connection() {
     let (_handle, addr, _rx) = test_bridge(true);
 
-    let response = raw_request(addr.as_str(), "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    let response = raw_request(
+        addr.as_str(),
+        &format!("GET /{PASS}/ HTTP/1.1\r\nHost: x\r\n\r\n"),
+    );
 
     assert!(
         response.contains("Connection: close\r\n"),

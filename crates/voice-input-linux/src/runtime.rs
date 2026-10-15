@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::bridge::{spawn_bridge, BridgeConfig, BridgeRequest, BridgeStatus, QUEUE_CAPACITY};
-use crate::bridge_addr::{detect_local_ipv4, generate_token};
+use crate::bridge_addr::{
+    detect_local_ipv4, generate_pass_phrase, normalize_pass_phrase, MAX_PASS_PHRASE_LEN,
+    MIN_PASS_PHRASE_LEN,
+};
 use crate::bridge_http::char_count;
 use crate::host::LinuxInputMethodHost;
 use crate::hotkey::{LinuxHotkeySpec, LinuxHotkeyWatcher};
@@ -172,18 +175,24 @@ pub struct BridgeSetup {
     pub settings: LinuxAppSettings,
 }
 
-/// 决定 token 与生效 settings。
+/// 决定口令与生效 settings。
 ///
-/// token 缺失时生成一个新的并写回 settings。**`run_live_app` 必须在
+/// 口令缺失或非法时生成一个新的并写回 settings。**`run_live_app` 必须在
 /// `token_is_new` 为真时把它落盘**——落盘不在本函数里，因为本函数是纯函数、
-/// 要能单测；少了那一步，每次重启都会换一个新 token，手机上存的地址全部失效。
+/// 要能单测；少了那一步，每次重启都会换一个新口令，手机上存的地址全部失效。
 pub fn prepare_bridge(config: BridgeSetupConfig) -> BridgeSetup {
-    let token_is_new = config.stored_token.trim().is_empty();
-    let token = if token_is_new {
-        generate_token()
-    } else {
-        config.stored_token
-    };
+    // 盘上的值可能非法：用户手改过配置，或者存的是别的什么。旧版的 32 位十六进制
+    // 属于合法字符集（`[0-9a-f]`），归一化后原样沿用，升级不会换口令。
+    let stored = normalize_pass_phrase(&config.stored_token);
+    let token_is_new = stored.is_none();
+    if token_is_new && !config.stored_token.trim().is_empty() {
+        // 只在「写了东西但不合法」时提示。空串是正常的首次启动。
+        eprintln!(
+            "配置里的手机输入口令不合法（只允许 {MIN_PASS_PHRASE_LEN}-{MAX_PASS_PHRASE_LEN} \
+             位 ASCII 字母数字与 -_），已重新生成"
+        );
+    }
+    let token = stored.unwrap_or_else(generate_pass_phrase);
 
     let mut settings = config.saved_settings;
     settings.bridge_token = token.clone();
@@ -363,7 +372,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
 
     let local_ip = detect_local_ipv4().map(|ip| ip.to_string());
     if let Some(ref handle) = bridge {
-        // 只打端口，不打地址——地址里带 token，而 journal 是落盘的。
+        // 只打端口，不打地址——地址里带口令，而 journal 是落盘的。
         // 需要地址时从托盘菜单「复制外部输入地址」取。
         println!("手机输入已就绪，监听端口 {}", handle.local_addr().port());
     }
@@ -382,6 +391,7 @@ pub fn run_live_app(config: LinuxLiveAppConfig) -> Result<()> {
             bridge.is_some(),
             config.bridge_port,
             setup.token.clone(),
+            setup.settings.bridge_host.clone(),
             local_ip,
             setup.settings.clone(),
         ))?;
@@ -648,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_setup_generates_token_when_missing() {
+    fn bridge_setup_generates_pass_phrase_when_missing() {
         let config = BridgeSetupConfig {
             enabled_in_settings: true,
             port: 8765,
@@ -658,46 +668,81 @@ mod tests {
 
         let setup = prepare_bridge(config);
 
-        assert_eq!(setup.token.len(), 32, "应当生成 32 位十六进制 token");
+        assert!(
+            normalize_pass_phrase(&setup.token).is_some(),
+            "生成的口令必须自己能认，实际：{}",
+            setup.token
+        );
         assert!(
             setup.settings.bridge_token == setup.token,
-            "生成的 token 必须写回 settings，否则重启后手机上存的地址就失效了"
+            "生成的口令必须写回 settings，否则重启后手机上存的地址就失效了"
         );
+        assert!(setup.token_is_new, "没有旧口令时必须标记为新的");
     }
 
     #[test]
-    fn bridge_setup_reuses_stored_token() {
+    fn bridge_setup_reuses_stored_pass_phrase() {
         let config = BridgeSetupConfig {
             enabled_in_settings: true,
             port: 8765,
-            stored_token: "storedtoken".to_string(),
+            stored_token: "lanhexin".to_string(),
             saved_settings: LinuxAppSettings::default(),
         };
 
         let setup = prepare_bridge(config);
 
-        assert_eq!(setup.token, "storedtoken");
+        assert_eq!(setup.token, "lanhexin");
+        assert!(!setup.token_is_new, "沿用旧口令时不该重复写盘");
     }
 
     #[test]
-    fn bridge_setup_marks_fresh_token_as_new() {
-        // 调用方靠这个标志决定要不要落盘。漏了它，新 token 就只活在内存里，
-        // 每次重启换一个，手机上存的地址全部失效。
-        let missing = prepare_bridge(BridgeSetupConfig {
+    fn bridge_setup_normalizes_stored_pass_phrase() {
+        // 用户在配置里大写写了，地址是拼口令生成的，两处必须一致。
+        let config = BridgeSetupConfig {
             enabled_in_settings: true,
             port: 8765,
-            stored_token: String::new(),
+            stored_token: "  LanHeXin  ".to_string(),
             saved_settings: LinuxAppSettings::default(),
-        });
-        assert!(missing.token_is_new, "没有旧 token 时必须标记为新的");
+        };
 
-        let reused = prepare_bridge(BridgeSetupConfig {
+        let setup = prepare_bridge(config);
+
+        assert_eq!(setup.token, "lanhexin");
+    }
+
+    #[test]
+    fn bridge_setup_replaces_illegal_stored_pass_phrase() {
+        // 手改配置写成带斜杠的，会把路由切断；这种值不能沿用。
+        let config = BridgeSetupConfig {
             enabled_in_settings: true,
             port: 8765,
-            stored_token: "storedtoken".to_string(),
+            stored_token: "lan/hexin".to_string(),
             saved_settings: LinuxAppSettings::default(),
-        });
-        assert!(!reused.token_is_new, "沿用旧 token 时不该重复写盘");
+        };
+
+        let setup = prepare_bridge(config);
+
+        assert_ne!(setup.token, "lan/hexin");
+        assert!(normalize_pass_phrase(&setup.token).is_some());
+        assert!(setup.token_is_new, "换成新口令后必须落盘");
+    }
+
+    #[test]
+    fn bridge_setup_reuses_legacy_hex_token() {
+        // 旧版盘上存的是 32 位十六进制，属于合法字符集。升级必须原样沿用，
+        // 否则每台机器升一次级就换一次口令，手机上所有书签全废。
+        let legacy = "3f9a2c8e1b7d4a6f0e5c9b3d8a1f7e2c";
+        let config = BridgeSetupConfig {
+            enabled_in_settings: true,
+            port: 8765,
+            stored_token: legacy.to_string(),
+            saved_settings: LinuxAppSettings::default(),
+        };
+
+        let setup = prepare_bridge(config);
+
+        assert_eq!(setup.token, legacy);
+        assert!(!setup.token_is_new);
     }
 
     #[test]

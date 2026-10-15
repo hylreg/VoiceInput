@@ -31,6 +31,9 @@ mod linux_tray {
         pub bridge_available: bool,
         pub bridge_port: u16,
         pub bridge_token: String,
+        /// 用户显式指定的稳定主机名（如 tailnet 名）。空串表示没设，
+        /// 此时地址回落到 `local_ip`。刻意不自动填 IP——IP 是 DHCP 动态的。
+        pub bridge_host: String,
         /// 本机局域网 IP。`None` 表示探测失败。
         pub local_ip: Option<String>,
         /// 初始开关状态，用于预填托盘的本地副本。
@@ -58,6 +61,7 @@ mod linux_tray {
                     "bridge_token",
                     &format_args!("<redacted; {} chars>", self.bridge_token.len()),
                 )
+                .field("bridge_host", &self.bridge_host)
                 .field("local_ip", &self.local_ip)
                 .field("settings", &self.settings)
                 .finish()
@@ -79,6 +83,7 @@ mod linux_tray {
             bridge_available: bool,
             bridge_port: u16,
             bridge_token: String,
+            bridge_host: String,
             local_ip: Option<String>,
             settings: LinuxAppSettings,
         ) -> Self {
@@ -95,6 +100,7 @@ mod linux_tray {
                 bridge_available,
                 bridge_port,
                 bridge_token,
+                bridge_host,
                 local_ip,
                 settings,
             }
@@ -200,6 +206,7 @@ mod linux_tray {
         bridge_available: bool,
         bridge_port: u16,
         bridge_token: String,
+        bridge_host: String,
         local_ip: Option<String>,
         /// 与共享 AtomicBool 同步的 settings 副本，退出时整体落盘。
         settings: RefCell<LinuxAppSettings>,
@@ -226,6 +233,7 @@ mod linux_tray {
                 bridge_available: config.bridge_available,
                 bridge_port: config.bridge_port,
                 bridge_token: config.bridge_token,
+                bridge_host: config.bridge_host,
                 local_ip: config.local_ip,
                 settings: RefCell::new(config.settings),
             }
@@ -329,16 +337,22 @@ mod linux_tray {
         }
 
         /// 地址在点击时现算——网卡是 DHCP 动态的，IP 会变。
-        /// IP 探测失败时回落 127.0.0.1，方便在本机浏览器里验证页面本身。
+        ///
+        /// 主机名三级回落：配置里显式写的稳定名字（tailnet 名等）→ 本机探测到的
+        /// IP（会随 DHCP 变，但不用配就能用）→ `127.0.0.1`（手机上打不开，
+        /// 只为本机浏览器验证页面本身，这是唯一的本机自测手段）。
         ///
         /// 返回 `String` 而非 `Option`：回落让「拼不出地址」不可能发生，
         /// 用 `Option` 只会让每个调用方都写一段永远走不到的分支。
         fn address_url(&self) -> String {
-            let ip = self
-                .local_ip
-                .clone()
-                .unwrap_or_else(|| "127.0.0.1".to_string());
-            bridge_url(&ip, self.bridge_port, &self.bridge_token)
+            let host = if self.bridge_host.trim().is_empty() {
+                self.local_ip
+                    .clone()
+                    .unwrap_or_else(|| "127.0.0.1".to_string())
+            } else {
+                self.bridge_host.clone()
+            };
+            bridge_url(&host, self.bridge_port, &self.bridge_token)
         }
     }
 
@@ -585,6 +599,7 @@ mod linux_tray {
                 bridge_available: true,
                 bridge_port: 8765,
                 bridge_token: "abc123".to_string(),
+                bridge_host: String::new(),
                 local_ip: local_ip.map(str::to_string),
                 settings: RefCell::new(LinuxAppSettings::default()),
             }
@@ -788,14 +803,45 @@ mod linux_tray {
         fn address_url_uses_current_ip() {
             let tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
 
-            assert_eq!(tray.address_url(), "http://10.0.0.5:8765/#k=abc123");
+            assert_eq!(tray.address_url(), "http://10.0.0.5:8765/abc123/");
         }
 
         #[test]
         fn address_url_falls_back_to_loopback_when_ip_unknown() {
             let tray = tray_with_bridge(MATCHING, false, true, true, true, None);
 
-            assert_eq!(tray.address_url(), "http://127.0.0.1:8765/#k=abc123");
+            assert_eq!(tray.address_url(), "http://127.0.0.1:8765/abc123/");
+        }
+
+        #[test]
+        fn address_url_prefers_configured_host() {
+            // 配了稳定主机名（tailnet 名等）就用它——IP 是 DHCP 动态的，
+            // 名字才是「设一次就不用再管」的那条路。
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+            tray.bridge_host = "leju.tail3e3e47.ts.net".to_string();
+
+            assert_eq!(
+                tray.address_url(),
+                "http://leju.tail3e3e47.ts.net:8765/abc123/"
+            );
+        }
+
+        #[test]
+        fn address_url_ignores_blank_configured_host() {
+            // 空串是「没设」的哨兵值，不能把地址拼成 http://:8765/xxx/。
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+            tray.bridge_host = "   ".to_string();
+
+            assert_eq!(tray.address_url(), "http://10.0.0.5:8765/abc123/");
+        }
+
+        #[test]
+        fn address_url_never_carries_the_old_fragment() {
+            let tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+
+            let url = tray.address_url();
+            assert!(!url.contains('#'), "实际：{url}");
+            assert!(!url.contains("k="), "实际：{url}");
         }
 
         #[test]

@@ -9,7 +9,7 @@ pub const MAX_BODY_BYTES: usize = 8192;
 
 // 面向用户的错误文案，单一来源——页面直接渲染服务端返回的 error 字段，
 // 不做状态码到文案的二次映射，两边不会不一致。
-pub const MSG_UNAUTHORIZED: &str = "token 无效，请从托盘菜单重新复制地址";
+pub const MSG_UNAUTHORIZED: &str = "口令已变更，请从托盘菜单重新复制地址";
 pub const MSG_BRIDGE_DISABLED: &str = "手机输入已关闭，请在托盘菜单里开启";
 pub const MSG_TOO_LONG: &str = "文本过长，请拆分后分次发送";
 pub const MSG_EMPTY: &str = "文本为空";
@@ -23,8 +23,6 @@ pub struct RequestHead {
     pub method: String,
     /// 已剥掉 query 与 fragment 的路径。
     pub path: String,
-    /// `X-Auth-Token` 头的值，缺失时为 `None`。
-    pub token: Option<String>,
     /// `Content-Length`，缺失时为 0。
     pub content_length: usize,
 }
@@ -75,15 +73,14 @@ pub fn parse_head(head: &str) -> Result<RequestHead, String> {
     Ok(RequestHead {
         method: method.to_string(),
         path: strip_target(target).to_string(),
-        token: find_header(head, "x-auth-token").map(str::to_string),
         content_length,
     })
 }
 
-/// 内容按常量时间比较，避免逐字节提前返回泄漏 token 前缀。
+/// 内容按常量时间比较，避免逐字节提前返回泄漏口令前缀。
 ///
-/// 长度不同则立即返回，所以严格说不是全常量时间——但 token 长度本就公开
-/// （地址格式 `#k=<32 位十六进制>` 里写着），泄漏长度无价值。
+/// 长度不同则立即返回，所以严格说不是全常量时间——但长度就写在地址里
+/// （`http://主机:端口/<口令>/`），泄漏长度无价值。
 pub fn tokens_match(expected: &str, provided: &str) -> bool {
     let expected = expected.as_bytes();
     let provided = provided.as_bytes();
@@ -99,24 +96,46 @@ pub fn tokens_match(expected: &str, provided: &str) -> bool {
     diff == 0
 }
 
+/// 把路径拆成「口令段」与「其余部分」。其余部分去掉两端斜杠。
+///
+/// ```text
+/// "/yuyin"          -> ("yuyin", "")
+/// "/yuyin/"         -> ("yuyin", "")
+/// "/yuyin/send"     -> ("yuyin", "send")
+/// "/yuyin/api/status" -> ("yuyin", "api/status")
+/// "/"               -> ("", "")
+/// ```
+///
+/// 口令是路径第一段，因此裸 `/` 的前缀是空串——它既不是合法口令，
+/// 也不会与任何非空口令相等。
+pub fn split_prefix(path: &str) -> (&str, &str) {
+    let rest = path.strip_prefix('/').unwrap_or(path);
+
+    match rest.split_once('/') {
+        Some((head, tail)) => (head, tail.trim_end_matches('/')),
+        None => (rest, ""),
+    }
+}
+
 /// 路由判定结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
-    /// 手机页面本身，公开访问。
+    /// 手机页面本身。口令正确才可达。
     Page,
-    /// 注入文字，需要 token。
+    /// 注入文字。
     Send,
-    /// 状态查询，需要 token。
+    /// 状态查询。
     Status,
     NotFound,
 }
 
-/// 按方法 + 路径判定路由。方法不匹配视为 NotFound（本服务不实现 405）。
-pub fn route(method: &str, path: &str) -> Route {
-    match (method, path) {
-        ("GET", "/") => Route::Page,
-        ("POST", "/send") => Route::Send,
-        ("GET", "/api/status") => Route::Status,
+/// 按方法 + 路径判定路由。`rest` 是 [`split_prefix`] 的第二项（已去掉口令段）。
+/// 方法不匹配视为 NotFound（本服务不实现 405）。
+pub fn route(method: &str, rest: &str) -> Route {
+    match (method, rest) {
+        ("GET", "") => Route::Page,
+        ("POST", "send") => Route::Send,
+        ("GET", "api/status") => Route::Status,
         _ => Route::NotFound,
     }
 }
@@ -279,14 +298,15 @@ mod tests {
         assert_eq!(normalize_text(""), "");
     }
 
-    const SEND_HEAD: &str = "POST /send HTTP/1.1\r\nHost: 10.10.10.42:8765\r\nX-Auth-Token: abc123\r\nContent-Length: 27\r\n\r\n";
+    const SEND_HEAD: &str =
+        "POST /yuyin/send HTTP/1.1\r\nHost: 10.10.10.42:8765\r\nContent-Length: 27\r\n\r\n";
 
     #[test]
     fn parses_method_and_path() {
         let head = parse_head(SEND_HEAD).expect("请求头应当解析成功");
 
         assert_eq!(head.method, "POST");
-        assert_eq!(head.path, "/send");
+        assert_eq!(head.path, "/yuyin/send");
     }
 
     #[test]
@@ -316,32 +336,18 @@ mod tests {
     }
 
     #[test]
-    fn parses_auth_token_header() {
-        assert_eq!(
-            parse_head(SEND_HEAD).unwrap().token.as_deref(),
-            Some("abc123")
-        );
-    }
-
-    #[test]
-    fn auth_token_header_is_case_insensitive() {
-        let raw = "POST /send HTTP/1.1\r\nx-auth-token: def456\r\n\r\n";
-
-        assert_eq!(parse_head(raw).unwrap().token.as_deref(), Some("def456"));
-    }
-
-    #[test]
-    fn missing_auth_token_is_none() {
-        let raw = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
-
-        assert_eq!(parse_head(raw).unwrap().token, None);
-    }
-
-    #[test]
     fn query_string_is_stripped_from_path() {
-        let raw = "GET /api/status?t=1 HTTP/1.1\r\n\r\n";
+        let raw = "GET /yuyin/api/status?t=1 HTTP/1.1\r\n\r\n";
 
-        assert_eq!(parse_head(raw).unwrap().path, "/api/status");
+        assert_eq!(parse_head(raw).unwrap().path, "/yuyin/api/status");
+    }
+
+    #[test]
+    fn fragment_is_stripped_from_path() {
+        // 浏览器不会把 fragment 发给服务器，但纯函数要对任何输入都给确定结果。
+        let raw = "GET /yuyin/send#x HTTP/1.1\r\n\r\n";
+
+        assert_eq!(parse_head(raw).unwrap().path, "/yuyin/send");
     }
 
     #[test]
@@ -354,7 +360,6 @@ mod tests {
         let head = parse_head("GET / HTTP/1.1\r\n\r\n").expect("只有请求行也应当接受");
 
         assert_eq!(head.path, "/");
-        assert_eq!(head.token, None);
         assert_eq!(head.content_length, 0);
     }
 
@@ -385,31 +390,73 @@ mod tests {
     }
 
     #[test]
-    fn routes_page_at_root() {
-        assert_eq!(route("GET", "/"), Route::Page);
+    fn routes_page_at_bare_prefix() {
+        assert_eq!(route("GET", ""), Route::Page);
     }
 
     #[test]
     fn routes_send_at_send() {
-        assert_eq!(route("POST", "/send"), Route::Send);
+        assert_eq!(route("POST", "send"), Route::Send);
     }
 
     #[test]
     fn routes_status_at_api_status() {
-        assert_eq!(route("GET", "/api/status"), Route::Status);
+        assert_eq!(route("GET", "api/status"), Route::Status);
     }
 
     #[test]
     fn wrong_method_is_not_found() {
-        assert_eq!(route("GET", "/send"), Route::NotFound);
-        assert_eq!(route("POST", "/"), Route::NotFound);
-        assert_eq!(route("POST", "/api/status"), Route::NotFound);
+        assert_eq!(route("GET", "send"), Route::NotFound);
+        assert_eq!(route("POST", ""), Route::NotFound);
+        assert_eq!(route("POST", "api/status"), Route::NotFound);
     }
 
     #[test]
     fn unknown_path_is_not_found() {
-        assert_eq!(route("GET", "/nope"), Route::NotFound);
-        assert_eq!(route("GET", "/api/"), Route::NotFound);
+        assert_eq!(route("GET", "nope"), Route::NotFound);
+        assert_eq!(route("GET", "api/"), Route::NotFound);
+    }
+
+    #[test]
+    fn splits_prefix_off_a_bare_prefix() {
+        assert_eq!(split_prefix("/yuyin"), ("yuyin", ""));
+    }
+
+    #[test]
+    fn splits_prefix_off_a_trailing_slash() {
+        // 地址生成时带尾斜杠，但用户手打时不会带，两种都要认。
+        assert_eq!(split_prefix("/yuyin/"), ("yuyin", ""));
+    }
+
+    #[test]
+    fn splits_prefix_off_a_deeper_path() {
+        assert_eq!(split_prefix("/yuyin/send"), ("yuyin", "send"));
+        assert_eq!(split_prefix("/yuyin/api/status"), ("yuyin", "api/status"));
+    }
+
+    #[test]
+    fn splits_prefix_off_a_deep_path_with_trailing_slash() {
+        assert_eq!(split_prefix("/yuyin/send/"), ("yuyin", "send"));
+    }
+
+    #[test]
+    fn splits_bare_root_into_empty_prefix() {
+        // 裸 `/` 的口令段是空串：既不是合法口令，也不会等于任何非空口令。
+        assert_eq!(split_prefix("/"), ("", ""));
+    }
+
+    #[test]
+    fn splits_missing_leading_slash_too() {
+        // HTTP 请求行按理总有前导斜杠，但纯函数不该依赖调用方保证。
+        assert_eq!(split_prefix("yuyin/send"), ("yuyin", "send"));
+    }
+
+    #[test]
+    fn prefix_and_route_compose() {
+        // 端到端形状：路径 → (口令, 剩余) → 路由。
+        let (prefix, rest) = split_prefix("/yuyin/api/status");
+        assert_eq!(prefix, "yuyin");
+        assert_eq!(route("GET", rest), Route::Status);
     }
 
     #[test]
