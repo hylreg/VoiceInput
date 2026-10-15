@@ -87,14 +87,26 @@
   var LS_HISTORY = 'voiceinput.history';
   var LS_TOKEN = 'voiceinput.token';
   var LS_AUTO = 'voiceinput.auto';
-  // 首选信号是 compositionend——手机输入法在「这段话录完了」时发它，
-  // 我们不必再等一段静默去猜。IDLE_MS 只是兜底：个别输入法不合成、不发
-  // 这个事件（或用户是手打的），那时仍靠停笔判定。
+  // 首选信号是 compositionend——手机输入法录完一段会发它，我们不必再等静默。
+  // IDLE_MS 是兜底：不发这个事件的输入法、以及纯手打，都靠停笔判定。
   var IDLE_MS = 600;
+  // 收到 compositionend 后再等这么一下。有些输入法先发 compositionend 再补发
+  // input，那一刻 TEXT.value 还是旧的，立刻读会读到空的。
+  var SETTLE_MS = 50;
+  // 合成开着但一直不结束的看门狗。只为解开 composing 这个闩，不直接发。
+  var COMPOSING_STUCK_MS = 5000;
   var idleTimer = null;
+  var fastTimer = null;
+  var composingTimer = null;
   var busy = false;
+  // 合成是否正在进行。合成期间输入法吐的是还没定稿的中间结果，这时候
+  // 绝不能发——见 canAutoSend 处的说明。
+  var composing = false;
   // 合成期间是否见过按键。见 compositionend 处的说明。
   var typedWhileComposing = false;
+  // 上次自动发送失败了。此时不能再自动发：输入框里留着的是那句没发出去的
+  // 半截话，直接发会把新一句和它拼在一起注入。要用户改一笔才恢复。
+  var autoHalted = false;
 
   function parseToken(text) {
     var match = /(?:^|[#&])k=([0-9a-fA-F]+)/.exec(text || '');
@@ -151,6 +163,10 @@
 
   function showReconnect() {
     clearTimers();
+    // 自动发送整个停摆了，合成的闩也一并清掉。否则用户粘好新地址、开关恢复之后，
+    // 这个闩还挂着，得等 5 秒看门狗才自己解开——修好了却几秒钟没反应。
+    composing = false;
+    clearComposingWatchdog();
     RECONNECT.className = 'show';
     SEND.disabled = true;
     AUTO.disabled = true;
@@ -170,18 +186,61 @@
 
   // ---- 自动发送：输入法报「输入完成」就发；不发这个事件时靠停笔兜底 ----
 
-  function clearTimers() {
-    if (idleTimer !== null) { clearTimeout(idleTimer); idleTimer = null; }
+  // 能不能自动发。两个容易写错的地方：
+  //   1. 用 AUTO.disabled 而不是只看 AUTO.checked——token 失效时只是把开关置灰，
+  //      checked 仍是 true，光看它会在用户粘新地址时继续发。
+  //   2. composing / autoHalted 期间一律不发，理由见各自的注释。
+  function canAutoSend() {
+    return AUTO.checked && !AUTO.disabled && !busy && !composing &&
+      !autoHalted && !!TEXT.value.trim();
   }
 
+  function clearTimers() {
+    if (idleTimer !== null) { clearTimeout(idleTimer); idleTimer = null; }
+    if (fastTimer !== null) { clearTimeout(fastTimer); fastTimer = null; }
+  }
+
+  // 看门狗：合成开着却一直不结束时解锁。
+  //
+  // 必须由每个 input 事件续期，不能只在 compositionstart 挂一次——否则一段
+  // 说上 5 秒的语音会被误判成卡死，中途把半截话发出去。所以它的语义是
+  // 「合成中、且 5 秒内一个 input 都没有」才算卡住。
+  function armComposingWatchdog() {
+    if (composingTimer !== null) { clearTimeout(composingTimer); }
+    composingTimer = setTimeout(function () {
+      composingTimer = null;
+      composing = false;
+      // 只解锁，不直接发——让停笔兜底按正常节奏接手。
+      armIdle();
+    }, COMPOSING_STUCK_MS);
+  }
+
+  function clearComposingWatchdog() {
+    if (composingTimer !== null) { clearTimeout(composingTimer); composingTimer = null; }
+  }
+
+  // 收到 compositionend 后再等 SETTLE_MS 才发。为什么要等：
+  // 有的输入法先发 compositionend 再补发 input，那一刻 TEXT.value 还是旧的，
+  // 立刻读会读到空的；也有输入法把一句话拆成几次 composition，中间那次
+  // compositionend 之后几十毫秒就接着续上。等一小下，两种情况都能收敛。
+  function armFast() {
+    if (fastTimer !== null) { clearTimeout(fastTimer); }
+    fastTimer = setTimeout(function () {
+      fastTimer = null;
+      // 这 50ms 里如果又开始合成新一段，这里自然拦住。
+      if (!canAutoSend()) { return; }
+      send();
+    }, SETTLE_MS);
+  }
+
+  // 停笔兜底。只管「静默够了就发」这一件事；合成期间发不得，由
+  // canAutoSend() 里的 composing 拦，解锁则是看门狗的职责。
   function armIdle() {
-    if (!AUTO.checked || busy) { return; }
+    if (!canAutoSend()) { return; }
     if (idleTimer !== null) { clearTimeout(idleTimer); }
     idleTimer = setTimeout(function () {
       idleTimer = null;
-      // 兜底路径也要自己再确认一遍：计时器挂上之后开关可能被关掉、
-      // 请求可能已经上路了。
-      if (!AUTO.checked || busy || !TEXT.value.trim()) { return; }
+      if (!canAutoSend()) { return; }
       send();
     }, IDLE_MS);
   }
@@ -225,6 +284,8 @@
             busy = false;
             SEND.disabled = false;
             AUTO.disabled = false;
+            // 上一句发成功，闩解开。下面若还有内容（发送期间又说的），重新计时。
+            autoHalted = false;
             if (TEXT.value.trim()) { armIdle(); }
             return;
           }
@@ -236,11 +297,18 @@
         notice(err.message, 'error');
         busy = false;
         // GET /api/status 与 POST /send 的 401 都要展开粘贴框。
+        // 这条路径不算自动发送失败：闩留给下面那些「重试一下就能好」的错。
         if (/token 已变更/.test(err.message)) { showReconnect(); return; }
         SEND.disabled = false;
         // 自动发送失败不重试——否则本机录音中或 token 失效会变成死循环刷屏。
-        // 文字留在输入框里，等用户改一笔才会重新计时。
+        // 而且这句没发出去的话还留在输入框里，再自动发会把下一句和它拼在
+        // 一起注入。置上闩，等用户明确处理。
+        autoHalted = true;
         AUTO.disabled = false;
+        // 闩上之后页面确实不会再自动发了，而服务端文案常带「稍后重试」——
+        // 照着等下去就是无限期干等。把真实情况和手机上做得到的恢复动作写清楚：
+        // 手机上多半没有硬件键盘，keydown 那条路指望不上，只剩「发送」按钮和开关。
+        notice(err.message + '。自动发送已暂停：点「发送」重试，或关掉再打开「说完自动发送」', 'error');
       });
   }
 
@@ -262,9 +330,17 @@
 
   SEND.addEventListener('click', send);
 
-  // 停笔兜底计时。任何输入都重置，所以改了字就不会发旧的。
+  // 改了字就重新计时，所以不会发旧的。
   TEXT.addEventListener('input', function () {
-    clearTimers();
+    // 合成还在进行：给看门狗续期。不续的话，一段超过 5 秒的语音会被误判成
+    // 「合成卡死」，中途解开闩——之后说话稍一停顿，半截话就被发出去。
+    if (composing) { armComposingWatchdog(); }
+    // 停笔计时一律作废：新输入就是新的一句，旧的那次不能算数。
+    if (idleTimer !== null) { clearTimeout(idleTimer); idleTimer = null; }
+    // 但快路（刚收到 compositionend）要留着——有些输入法正是先发
+    // compositionend 再补发这个 input，把它清掉就等于每次都白等 600ms，
+    // 那正是我们要摆脱的延迟。
+    if (fastTimer !== null) { return; }
     if (TEXT.value.trim()) { armIdle(); } else { notice(''); }
   });
 
@@ -274,31 +350,41 @@
   // 语音插入则没有按键。合成期间出现过 keydown 就说明是人手打的，
   // 退回停笔计时——用户多敲一笔就是新的一句，不该被立刻发出去。
   TEXT.addEventListener('compositionstart', function () {
+    composing = true;
     typedWhileComposing = false;
+    armComposingWatchdog();
   });
 
   TEXT.addEventListener('compositionend', function () {
     clearTimers();
+    clearComposingWatchdog();
+    composing = false;
     // 用完就清。否则一次手打会把这个标志永久置真，之后的语音输入
     // 就再也走不到「立刻发」那条路了。
     var typed = typedWhileComposing;
     typedWhileComposing = false;
-    if (!AUTO.checked || busy || !TEXT.value.trim()) { return; }
-    if (typed) { armIdle(); } else { send(); }
+    if (!canAutoSend()) { return; }
+    // 手打的不立刻发：用户多敲一笔就是新的一句。语音的走快路，
+    // 但也等 SETTLE_MS，好让「compositionend 先于 input」的输入法定稿。
+    if (typed) { armIdle(); } else { armFast(); }
   });
 
   AUTO.addEventListener('change', function () {
     clearTimers();
     try { localStorage.setItem(LS_AUTO, AUTO.checked ? '1' : '0'); }
     catch (e) { /* 存不下就用本次的 */ }
-    if (AUTO.checked && TEXT.value.trim()) { armIdle(); }
+    // 关掉再打开，等于明确说「别再卡着」——把失败留下的闩一起解开。
+    if (AUTO.checked) { autoHalted = false; }
+    if (canAutoSend()) { armIdle(); }
   });
 
   APPLY.addEventListener('click', applyNewAddress);
   // 回车不发送：手机语音输入会插入换行，回车当发送必然误触。
   // 顺带记录按键——手打与语音插入靠它区分，见 compositionend 处。
+  // 也顺手解开发送失败留下的闩：用户回来动了键盘，就是要接着用的意思。
   TEXT.addEventListener('keydown', function (event) {
     typedWhileComposing = true;
+    autoHalted = false;
     if (event.key === 'Enter') { event.preventDefault(); }
   });
   NEWADDR.addEventListener('keydown', function (event) {
