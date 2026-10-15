@@ -259,3 +259,55 @@ token 是唯一屏障，不可视为装饰。
 `target/release/voice-input-linux live --backend ibus`。
 
 `--bridge-port` 从 env 或 launcher 传即可，**不需要改 unit 文件**。
+
+## 实测记录
+
+2026-10-15，本机 `leju`（`10.10.10.42`），服务由 systemd 拉起。
+
+### 本机 curl 用例
+
+| 用例 | 结果 |
+|---|---|
+| `GET /` | 200 `text/html`，11741 字节 |
+| `GET /api/status`（正确 token） | 200 `{"mic_recording":false,"bridge_enabled":true}` |
+| `GET /api/status`（错 token / 无 token / 空 token） | 401 |
+| `GET /nope` | 404 |
+| `POST /send`（空白文本） | 400 |
+| `POST /send`（501 字） | 413 |
+| `POST /send`（25 字真实注入） | 200 `{"ok":true}` |
+
+注入链路日志为「收到 N 字，等待注入」→「已注入 N 字」，注入内容在 journal 里出现 **0 次**。
+剪贴板在注入后已还原，注入完成后无残留连接。
+
+### 端口占用降级
+
+占住 8765 后启动：主程序照常运行（跑到超时才被杀），日志为
+
+```
+注入错误：桥接端口 8765 绑定失败：Address already in use (os error 98)
+手机输入已禁用；本机麦克风不受影响
+```
+
+### 慢速请求头
+
+25 行、每行间隔 200ms 的滴流请求头在 5s 处被切断并回 400——整条请求的截止时间生效，
+不是逐次读超时（那样永远等不到上限）。
+
+### 发现并修复的缺陷
+
+**新生成的 token 从未落盘。** 盘上 `bridge_token` 恒为空串，而服务端拒绝空 token，
+说明 token 只活在内存里：下次重启换一个，手机上存的地址全部失效。
+根因是唯一的落盘点 `live_cli` 的 `save()` 跑在 `prepare_bridge` 之前，写下的还是空串，
+`run_live_app` 之后再没有第二处。
+
+修复：`BridgeSetup` 加 `token_is_new`，`run_live_app` 在启动时补写一次（仅在新生成时写，
+避免每次启动都 fsync 配置目录）。实测清空 token 后连续重启两次，两次拿到同一串 32 位 token。
+
+### 待实测（手机侧）
+
+以下只有真机能验，尚未完成：
+
+- 手机浏览器是否正常读取 URL fragment 里的 token（部分浏览器对 fragment 处理有差异）
+- 手机输入法语音键的插入方式（一次性整句 / 流式逐字）与「停笔 1.5s」阈值的配合
+- 超过 250 字时 `xdotool type` 的实际注入耗时，`MAX_TEXT_CHARS = 500` 是否偏大
+- 切换焦点窗口后注入是否落到新窗口
