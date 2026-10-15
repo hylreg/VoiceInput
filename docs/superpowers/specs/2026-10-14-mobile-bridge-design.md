@@ -451,3 +451,22 @@ fragment 不进浏览器历史、不发 Referer，但换来的是**地址只能�
 - 手机输入法语音键的插入方式（一次性整句 / 流式逐字）——决定走 `compositionend` 快路还是 600ms 兜底
 - 超过 250 字时 `xdotool type` 的实际注入耗时，`MAX_TEXT_CHARS = 500` 是否偏大
 - 切换焦点窗口后注入是否落到新窗口
+
+### 本机可达性摸底（关于固定主机名）
+
+`leju.tail3e3e47.ts.net` 这个名字在本机解析不了：`tailscale dns status` 显示
+`Tailscale DNS: disabled`（`accept-dns=false`），systemd-resolved 里也没有 tailscale0 的
+搜索域，所以 `~.` 走公网 DNS，`ts.net` 自然查不到。**这是本机的事，不影响手机**——
+手机上装 Tailscale App 自带解析。
+
+本机逐条实测：
+
+| 地址 | 结果 |
+|---|---|
+| `http://100.65.179.39:8765/<口令>/api/status` | 200（tailscale0 的 IP，通路本身没问题） |
+| `http://10.10.10.42:8765/...` | 200 |
+| `http://leju.local:8765/...` | 200（本机自己解析得到） |
+| `http://leju.tail3e3e47.ts.net:8765/...` | 解析失败（本机 DNS 未接管） |
+
+想在本机也用这个名字：`sudo tailscale set --accept-dns=true`。
+不做也完全不影响手机侧，所以没有替用户改这个系统级设置。

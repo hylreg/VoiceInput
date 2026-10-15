@@ -98,6 +98,14 @@ bridge_host = "leju.tail3e3e47.ts.net"
 而且流量走 WireGuard 加密——口令不再是明文传输。Android 不要用 `leju.local`：
 Chrome 不做 mDNS 解析，本机 avahi 也没把它发布到局域网地址上。
 
+**本机的 `accept-dns` 是关的**（`tailscale dns status` 会显示 `Tailscale DNS: disabled`），
+所以这台机器自己解析不了 `leju.tail3e3e47.ts.net`——这不影响手机，
+但本机自测要用 IP。想在本机也能用这个名字：
+
+```bash
+sudo tailscale set --accept-dns=true
+```
+
 留空则回落到本机探测到的 IP（不用配就能用，只是 IP 变了要重发地址）。
 
 托盘菜单里有两个独立开关：
