@@ -117,6 +117,36 @@ fn wrong_pass_phrase_is_unauthorized() {
 }
 
 #[test]
+fn pass_phrase_is_case_insensitive() {
+    // 手机地址栏、微信、输入法都可能把口令首字母大写。逐字比对会让这种地址
+    // 直接 401，而用户只看到一句「口令已变更」，根本不知道该改哪个字母。
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let upper = raw_request(addr.as_str(), "GET /LanHeXin/ HTTP/1.1\r\nHost: x\r\n\r\n");
+    let all_upper = raw_request(addr.as_str(), "GET /LANHEXIN/ HTTP/1.1\r\nHost: x\r\n\r\n");
+
+    assert!(upper.starts_with("HTTP/1.1 200 "), "实际：{upper}");
+    assert!(all_upper.starts_with("HTTP/1.1 200 "), "实际：{all_upper}");
+}
+
+#[test]
+fn case_insensitivity_does_not_widen_the_accepted_set() {
+    // 大小写不敏感不等于宽进：换一个字母仍然是 401。
+    // 而且长度不同的口令也要照样被拒（`tokens_match` 的长度短路没被破坏）。
+    let (_handle, addr, _rx) = test_bridge(true);
+
+    let wrong_letter = raw_request(addr.as_str(), "GET /LanHexiM/ HTTP/1.1\r\nHost: x\r\n\r\n");
+    let shorter = raw_request(addr.as_str(), "GET /LanHe/ HTTP/1.1\r\nHost: x\r\n\r\n");
+
+    assert!(
+        wrong_letter.starts_with("HTTP/1.1 401 "),
+        "实际：{wrong_letter}"
+    );
+    // 长度不同的前缀走「大小写归一化后仍不等」这条路，同样是 401。
+    assert!(shorter.starts_with("HTTP/1.1 401 "), "实际：{shorter}");
+}
+
+#[test]
 fn wrong_pass_phrase_does_not_leak_path_existence() {
     // 先鉴权后路由：口令不对时，路径对不对都是 401，攻击者没法靠
     // 「404 还是 401」把口令一段段试出来。

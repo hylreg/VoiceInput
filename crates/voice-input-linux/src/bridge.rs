@@ -309,8 +309,14 @@ fn build_response(
     // 否则攻击者能靠「404 还是 401」把口令的正确前缀一段段试出来。
     // 代价是裸 `/` 也回 401（它的口令段是空串），页面拿不到任何提示，
     // 但裸 `/` 本来就不是给人看的地址。
+    //
+    // 大小写不敏感：盘上的口令统一存小写（`normalize_pass_phrase` 归一化过），
+    // 而手机地址栏、微信、各种输入法都可能把它首字母大写。逐字比对会让
+    // 「首字母大写了」这种地址直接 401 —— 用户只看到一句「口令已变更」，
+    // 完全不知道该把哪个字母改回小写。降维成小写比对不会削弱什么：
+    // 口令的字母表本来就只有 `[a-z0-9_-]`，少几个大小写变体，熵的差别可以忽略。
     let (prefix, rest) = split_prefix(&parsed.path);
-    if !tokens_match(&status.token(), prefix) {
+    if !tokens_match(&status.token(), &prefix.to_ascii_lowercase()) {
         return HttpResponse::error(401, MSG_UNAUTHORIZED);
     }
 

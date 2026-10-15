@@ -344,15 +344,25 @@ mod linux_tray {
         ///
         /// 返回 `String` 而非 `Option`：回落让「拼不出地址」不可能发生，
         /// 用 `Option` 只会让每个调用方都写一段永远走不到的分支。
+        fn address_host(&self) -> &str {
+            // 配了名字就一律用它，连 IP 都不去探——用户写下来的就是他要的那个地址。
+            // `trim` 之后的借用来自 self，所以这里先取出再判空。
+            let configured = self.bridge_host.trim();
+            if !configured.is_empty() {
+                return configured;
+            }
+
+            self.local_ip.as_deref().unwrap_or("127.0.0.1")
+        }
+
+        /// 地址是不是回落到 `127.0.0.1` 了。只有「没配名字、又没探到 IP」才算，
+        /// 配了名字就不该再报这个——否则用户按提示去查网络，而地址其实是对的。
+        fn address_fell_back_to_loopback(&self) -> bool {
+            self.bridge_host.trim().is_empty() && self.local_ip.is_none()
+        }
+
         fn address_url(&self) -> String {
-            let host = if self.bridge_host.trim().is_empty() {
-                self.local_ip
-                    .clone()
-                    .unwrap_or_else(|| "127.0.0.1".to_string())
-            } else {
-                self.bridge_host.clone()
-            };
-            bridge_url(&host, self.bridge_port, &self.bridge_token)
+            bridge_url(self.address_host(), self.bridge_port, &self.bridge_token)
         }
     }
 
@@ -465,9 +475,9 @@ mod linux_tray {
                     visible: true,
                     icon_name: "edit-copy".to_string(),
                     activate: Box::new(|tray: &mut LinuxTray| {
-                        // IP 探测失败时地址回落到 127.0.0.1：手机打不开，但本机浏览器
+                        // 真的回落到 127.0.0.1 时才提示：地址在手机上打不开，但本机浏览器
                         // 能验证页面是否正常。提示必须先于写剪贴板打印，才能在写失败时也看到。
-                        if tray.local_ip.is_none() {
+                        if tray.address_fell_back_to_loopback() {
                             eprintln!(
                                 "外部输入地址：未探测到局域网 IP，已回退到 127.0.0.1（仅供本机浏览器验证）"
                             );
@@ -833,6 +843,40 @@ mod linux_tray {
             tray.bridge_host = "   ".to_string();
 
             assert_eq!(tray.address_url(), "http://10.0.0.5:8765/abc123/");
+        }
+
+        #[test]
+        fn address_url_trims_the_configured_host() {
+            // 粘进来的名字十有八九带空格。不 trim 就会拼出
+            // `http:// leju.tail…ts.net :8765/xxx/`——浏览器把它当畸形地址。
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, Some("10.0.0.5"));
+            tray.bridge_host = "  leju.tail3e3e47.ts.net  ".to_string();
+
+            assert_eq!(
+                tray.address_url(),
+                "http://leju.tail3e3e47.ts.net:8765/abc123/"
+            );
+        }
+
+        #[test]
+        fn configured_host_suppresses_the_loopback_warning() {
+            // 配了名字时地址一定不是回环，报「已回退到 127.0.0.1」会把用户
+            // 引去查网络——而地址其实是对的。
+            let mut tray = tray_with_bridge(MATCHING, false, true, true, true, None);
+            assert!(
+                tray.address_fell_back_to_loopback(),
+                "没配名字又没探到 IP，这才是真的回落"
+            );
+
+            tray.bridge_host = "leju.tail3e3e47.ts.net".to_string();
+            assert!(
+                !tray.address_fell_back_to_loopback(),
+                "配了名字就不是回落，不该再提示"
+            );
+            assert_eq!(
+                tray.address_url(),
+                "http://leju.tail3e3e47.ts.net:8765/abc123/"
+            );
         }
 
         #[test]

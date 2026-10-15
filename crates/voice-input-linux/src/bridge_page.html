@@ -68,7 +68,7 @@
 </label>
 <button id="send">发送</button>
 <div id="reconnect">
-  <p>口令已变更，请从托盘重新复制地址</p>
+  <p>口令已变更，请从托盘菜单重新复制地址</p>
   <input id="newaddr" type="text" autocomplete="off" autocapitalize="off"
          spellcheck="false" placeholder="粘贴托盘菜单复制的完整地址">
   <button id="apply">使用新地址</button>
@@ -310,7 +310,10 @@
   // （新口令得由服务端在路由里认，改内存里的变量是改不出来的）。
   function applyNewAddress() {
     var addr = NEWADDR.value.trim();
-    if (!/^https?:\/\/[^/]+\/.+/.test(addr)) {
+    // 只认「主机 + 一段非空路径」。路径第一段就是口令，所以裸主机（`http://h:8765/`）、
+    // 空路径段（`//x`）、多段路径都会被服务端 401 或 404 掉——与其让用户跳过去
+    // 再看一屏「口令已变更」，不如在这里就说地址不对。
+    if (!/^https?:\/\/[^/]+\/[^/]+/.test(addr)) {
       // 保持区域展开，让用户接着改。
       notice('地址不对，请粘贴托盘菜单「复制外部输入地址」给出的完整链接', 'error');
       RECONNECT.className = 'show';
