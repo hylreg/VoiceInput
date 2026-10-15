@@ -35,12 +35,6 @@
     border: 0; border-radius: 10px; background: #4c8bf5; color: #fff;
   }
   button:disabled { background: #3a3b44; color: #8a8a92; }
-  /* 倒计时期间出现的反悔按钮。自动发送直接写本机光标，不可逆。 */
-  #cancel {
-    display: none; padding: 12px; font-size: 15px; font-weight: 500;
-    background: #3a3b44; color: #e8e8ea;
-  }
-  #cancel.show { display: block; }
   #history { list-style: none; margin: 0; padding: 0; font-size: 13px; }
   #history li {
     padding: 8px 10px; border-radius: 8px; margin-bottom: 6px;
@@ -73,7 +67,6 @@
   <span>说完自动发送</span>
 </label>
 <button id="send">发送</button>
-<button id="cancel">取消自动发送</button>
 <div id="reconnect">
   <p>token 已变更，请从托盘重新复制地址</p>
   <input id="newaddr" type="text" autocomplete="off" autocapitalize="off"
@@ -86,7 +79,6 @@
   var TEXT = document.getElementById('text');
   var SEND = document.getElementById('send');
   var AUTO = document.getElementById('auto');
-  var CANCEL = document.getElementById('cancel');
   var NOTICE = document.getElementById('notice');
   var HISTORY = document.getElementById('history');
   var RECONNECT = document.getElementById('reconnect');
@@ -95,13 +87,14 @@
   var LS_HISTORY = 'voiceinput.history';
   var LS_TOKEN = 'voiceinput.token';
   var LS_AUTO = 'voiceinput.auto';
-  // 语音输入有的是一次性插入整句、有的是流式逐字插入，所以不认某个特定按键，
-  // 只认「停笔」：静默满 IDLE_MS 才算说完，再给 GRACE_MS 的倒计时让人反悔。
-  var IDLE_MS = 1500;
-  var GRACE_MS = 2000;
+  // 首选信号是 compositionend——手机输入法在「这段话录完了」时发它，
+  // 我们不必再等一段静默去猜。IDLE_MS 只是兜底：个别输入法不合成、不发
+  // 这个事件（或用户是手打的），那时仍靠停笔判定。
+  var IDLE_MS = 600;
   var idleTimer = null;
-  var graceTimer = null;
   var busy = false;
+  // 合成期间是否见过按键。见 compositionend 处的说明。
+  var typedWhileComposing = false;
 
   function parseToken(text) {
     var match = /(?:^|[#&])k=([0-9a-fA-F]+)/.exec(text || '');
@@ -175,31 +168,22 @@
     return { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' };
   }
 
-  // ---- 自动发送：停笔 1.5s → 倒计时 2s → 发送；期间任何输入都撤销 ----
+  // ---- 自动发送：输入法报「输入完成」就发；不发这个事件时靠停笔兜底 ----
 
   function clearTimers() {
     if (idleTimer !== null) { clearTimeout(idleTimer); idleTimer = null; }
-    if (graceTimer !== null) { clearTimeout(graceTimer); graceTimer = null; }
-    CANCEL.className = '';
   }
 
   function armIdle() {
     if (!AUTO.checked || busy) { return; }
     if (idleTimer !== null) { clearTimeout(idleTimer); }
-    idleTimer = setTimeout(startGrace, IDLE_MS);
-  }
-
-  function startGrace() {
-    idleTimer = null;
-    if (busy || !TEXT.value.trim()) { return; }
-    var left = Math.ceil(GRACE_MS / 1000);
-    notice(left + ' 秒后自动发送…');
-    CANCEL.className = 'show';
-    graceTimer = setTimeout(function () {
-      graceTimer = null;
-      CANCEL.className = '';
+    idleTimer = setTimeout(function () {
+      idleTimer = null;
+      // 兜底路径也要自己再确认一遍：计时器挂上之后开关可能被关掉、
+      // 请求可能已经上路了。
+      if (!AUTO.checked || busy || !TEXT.value.trim()) { return; }
       send();
-    }, GRACE_MS);
+    }, IDLE_MS);
   }
 
   function send() {
@@ -278,16 +262,29 @@
 
   SEND.addEventListener('click', send);
 
-  CANCEL.addEventListener('click', function () {
-    // 撤销本次待发送。内容留着，用户改一笔才会重新计时。
-    clearTimers();
-    notice('已取消自动发送', 'ok');
-  });
-
-  // 停笔计时：任何输入都重置，所以倒计时归零前改了字就不会发旧的。
+  // 停笔兜底计时。任何输入都重置，所以改了字就不会发旧的。
   TEXT.addEventListener('input', function () {
     clearTimers();
     if (TEXT.value.trim()) { armIdle(); } else { notice(''); }
+  });
+
+  // 输入法说「这段输入结束了」——语音键录完就会发这个事件，不用再等静默。
+  //
+  // 但 compositionend 对手打中文也会发。区分办法：手打必然伴随 keydown，
+  // 语音插入则没有按键。合成期间出现过 keydown 就说明是人手打的，
+  // 退回停笔计时——用户多敲一笔就是新的一句，不该被立刻发出去。
+  TEXT.addEventListener('compositionstart', function () {
+    typedWhileComposing = false;
+  });
+
+  TEXT.addEventListener('compositionend', function () {
+    clearTimers();
+    // 用完就清。否则一次手打会把这个标志永久置真，之后的语音输入
+    // 就再也走不到「立刻发」那条路了。
+    var typed = typedWhileComposing;
+    typedWhileComposing = false;
+    if (!AUTO.checked || busy || !TEXT.value.trim()) { return; }
+    if (typed) { armIdle(); } else { send(); }
   });
 
   AUTO.addEventListener('change', function () {
@@ -299,7 +296,9 @@
 
   APPLY.addEventListener('click', applyNewAddress);
   // 回车不发送：手机语音输入会插入换行，回车当发送必然误触。
+  // 顺带记录按键——手打与语音插入靠它区分，见 compositionend 处。
   TEXT.addEventListener('keydown', function (event) {
+    typedWhileComposing = true;
     if (event.key === 'Enter') { event.preventDefault(); }
   });
   NEWADDR.addEventListener('keydown', function (event) {
