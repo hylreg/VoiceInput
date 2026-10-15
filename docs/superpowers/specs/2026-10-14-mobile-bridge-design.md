@@ -290,7 +290,7 @@ token 是唯一屏障，不可视为装饰。
 
 | 用例 | 结果 |
 |---|---|
-| `GET /` | 200 `text/html`，16306 字节，带 `Cache-Control: no-store` |
+| `GET /` | 200 `text/html`，17146 字节，带 `Cache-Control: no-store` |
 | `GET /api/status`（正确 token） | 200 `{"mic_recording":false,"bridge_enabled":true}` |
 | `GET /api/status`（错 token / 无 token / 空 token） | 401 |
 | `GET /nope` | 404 |
