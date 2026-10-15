@@ -24,11 +24,23 @@
     border: 1px solid #34353d;
   }
   textarea:focus { outline: 2px solid #4c8bf5; border-color: transparent; }
+  /* 自动发送开关：默认开，状态存 localStorage。 */
+  #autorow {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; color: #b9b9c1; user-select: none;
+  }
+  #autorow input { width: 18px; height: 18px; accent-color: #4c8bf5; }
   button {
     width: 100%; padding: 18px; font-size: 18px; font-weight: 600;
     border: 0; border-radius: 10px; background: #4c8bf5; color: #fff;
   }
   button:disabled { background: #3a3b44; color: #8a8a92; }
+  /* 倒计时期间出现的反悔按钮。自动发送直接写本机光标，不可逆。 */
+  #cancel {
+    display: none; padding: 12px; font-size: 15px; font-weight: 500;
+    background: #3a3b44; color: #e8e8ea;
+  }
+  #cancel.show { display: block; }
   #history { list-style: none; margin: 0; padding: 0; font-size: 13px; }
   #history li {
     padding: 8px 10px; border-radius: 8px; margin-bottom: 6px;
@@ -55,8 +67,13 @@
 <body>
 <h1>VoiceInput 手机输入</h1>
 <p id="notice"></p>
-<textarea id="text" autofocus placeholder="用输入法的语音键说话，确认后点发送"></textarea>
+<textarea id="text" autofocus placeholder="用输入法的语音键说话"></textarea>
+<label id="autorow">
+  <input id="auto" type="checkbox">
+  <span>说完自动发送</span>
+</label>
 <button id="send">发送</button>
+<button id="cancel">取消自动发送</button>
 <div id="reconnect">
   <p>token 已变更，请从托盘重新复制地址</p>
   <input id="newaddr" type="text" autocomplete="off" autocapitalize="off"
@@ -68,6 +85,8 @@
 (function () {
   var TEXT = document.getElementById('text');
   var SEND = document.getElementById('send');
+  var AUTO = document.getElementById('auto');
+  var CANCEL = document.getElementById('cancel');
   var NOTICE = document.getElementById('notice');
   var HISTORY = document.getElementById('history');
   var RECONNECT = document.getElementById('reconnect');
@@ -75,6 +94,14 @@
   var APPLY = document.getElementById('apply');
   var LS_HISTORY = 'voiceinput.history';
   var LS_TOKEN = 'voiceinput.token';
+  var LS_AUTO = 'voiceinput.auto';
+  // 语音输入有的是一次性插入整句、有的是流式逐字插入，所以不认某个特定按键，
+  // 只认「停笔」：静默满 IDLE_MS 才算说完，再给 GRACE_MS 的倒计时让人反悔。
+  var IDLE_MS = 1500;
+  var GRACE_MS = 2000;
+  var idleTimer = null;
+  var graceTimer = null;
+  var busy = false;
 
   function parseToken(text) {
     var match = /(?:^|[#&])k=([0-9a-fA-F]+)/.exec(text || '');
@@ -130,8 +157,10 @@
   }
 
   function showReconnect() {
+    clearTimers();
     RECONNECT.className = 'show';
     SEND.disabled = true;
+    AUTO.disabled = true;
     NEWADDR.focus();
   }
 
@@ -139,16 +168,46 @@
     RECONNECT.className = '';
     NEWADDR.value = '';
     SEND.disabled = false;
+    AUTO.disabled = false;
   }
 
   function authHeaders() {
     return { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' };
   }
 
+  // ---- 自动发送：停笔 1.5s → 倒计时 2s → 发送；期间任何输入都撤销 ----
+
+  function clearTimers() {
+    if (idleTimer !== null) { clearTimeout(idleTimer); idleTimer = null; }
+    if (graceTimer !== null) { clearTimeout(graceTimer); graceTimer = null; }
+    CANCEL.className = '';
+  }
+
+  function armIdle() {
+    if (!AUTO.checked || busy) { return; }
+    if (idleTimer !== null) { clearTimeout(idleTimer); }
+    idleTimer = setTimeout(startGrace, IDLE_MS);
+  }
+
+  function startGrace() {
+    idleTimer = null;
+    if (busy || !TEXT.value.trim()) { return; }
+    var left = Math.ceil(GRACE_MS / 1000);
+    notice(left + ' 秒后自动发送…');
+    CANCEL.className = 'show';
+    graceTimer = setTimeout(function () {
+      graceTimer = null;
+      CANCEL.className = '';
+      send();
+    }, GRACE_MS);
+  }
+
   function send() {
     var text = TEXT.value.trim();
     if (!text) { notice('文本为空', 'error'); return; }
     SEND.disabled = true;
+    AUTO.disabled = true;
+    busy = true;
     notice('检查本机状态…');
 
     fetch('/api/status', { headers: authHeaders() })
@@ -172,10 +231,17 @@
         return res.json().catch(function () { return {}; }).then(function (data) {
           if (res.ok) {
             push(text, false);
-            TEXT.value = '';
+            // 发送期间用户可能已经在说下一句了。只有输入框还是我们刚发出去的那段
+            // 才清空，否则会把新内容一起抹掉——那是静默丢字。
+            if (TEXT.value.trim() === text) {
+              TEXT.value = '';
+            }
             TEXT.focus();
             notice('已注入本机光标', 'ok');
+            busy = false;
             SEND.disabled = false;
+            AUTO.disabled = false;
+            if (TEXT.value.trim()) { armIdle(); }
             return;
           }
           throw new Error(data.error || ('发送失败（' + res.status + '）'));
@@ -184,9 +250,13 @@
       .catch(function (err) {
         push(text, true);
         notice(err.message, 'error');
+        busy = false;
         // GET /api/status 与 POST /send 的 401 都要展开粘贴框。
         if (/token 已变更/.test(err.message)) { showReconnect(); return; }
         SEND.disabled = false;
+        // 自动发送失败不重试——否则本机录音中或 token 失效会变成死循环刷屏。
+        // 文字留在输入框里，等用户改一笔才会重新计时。
+        AUTO.disabled = false;
       });
   }
 
@@ -207,6 +277,26 @@
   }
 
   SEND.addEventListener('click', send);
+
+  CANCEL.addEventListener('click', function () {
+    // 撤销本次待发送。内容留着，用户改一笔才会重新计时。
+    clearTimers();
+    notice('已取消自动发送', 'ok');
+  });
+
+  // 停笔计时：任何输入都重置，所以倒计时归零前改了字就不会发旧的。
+  TEXT.addEventListener('input', function () {
+    clearTimers();
+    if (TEXT.value.trim()) { armIdle(); } else { notice(''); }
+  });
+
+  AUTO.addEventListener('change', function () {
+    clearTimers();
+    try { localStorage.setItem(LS_AUTO, AUTO.checked ? '1' : '0'); }
+    catch (e) { /* 存不下就用本次的 */ }
+    if (AUTO.checked && TEXT.value.trim()) { armIdle(); }
+  });
+
   APPLY.addEventListener('click', applyNewAddress);
   // 回车不发送：手机语音输入会插入换行，回车当发送必然误触。
   TEXT.addEventListener('keydown', function (event) {
@@ -216,9 +306,16 @@
     if (event.key === 'Enter') { event.preventDefault(); applyNewAddress(); }
   });
 
+  // 默认开：这类页面不该逼用户每说一句点一次按钮。
+  var autoStored = null;
+  try { autoStored = localStorage.getItem(LS_AUTO); }
+  catch (e) { /* 读不到就用默认 */ }
+  AUTO.checked = autoStored === null ? true : autoStored === '1';
+
   if (!TOKEN) {
     notice('缺少 token，请用托盘菜单「复制外部输入地址」给出的完整链接打开', 'error');
     SEND.disabled = true;
+    AUTO.disabled = true;
   }
   render();
 })();
