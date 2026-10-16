@@ -65,7 +65,13 @@ cargo run -p voice-input-linux --features ibus -- live --backend ibus \
 它同时也是鉴权凭据，页面和接口都挂在它下面。
 
 首次启动会随机生成一个好记的拼音口令（三个音节拼起来，偶尔四个）并写进
-`~/.config/voice-input/linux-app.toml`（0600）。**改口令**就是改这一行：
+`~/.config/voice-input/linux-app.toml`（0600）。
+
+**从旧版本升级上来时不会换口令**：盘上已有的 32 位十六进制原样沿用（它正好在允许的
+字符集里），这样手机上已经存着的地址不会失效。所以升级后复制出来仍是
+`.../7a09c7a6…/` 这种长串——想要好记的就照下面改一行。
+
+**改口令**就是改这一行：
 
 ```toml
 bridge_token = "woyaogaiyige"
